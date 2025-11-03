@@ -1,0 +1,2277 @@
+---
+title: "main"
+format: html
+editor: visual
+---
+
+# Table 1
+
+```{r}
+# Load required libraries
+library(tableone)
+library(dplyr)
+library(flextable)
+library(officer)
+
+person <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Select relevant variables excluding `age_reported`
+vars <- c("gender", "race", "ethnicity", "age_precise",
+          "height", "weight", "BMI", "serum_creatinine", 
+          "eGFR_MDRD", "eGFR_ckd_epi_2009", "Albumin", 
+          "disease_status", "time_to_event_years")
+
+# Ensure categorical variables are factors
+person <- person %>%
+  mutate(across(c(gender, race, ethnicity, disease_status), as.factor))
+
+# Create Table 1
+table1 <- CreateTableOne(vars = vars, strata = "disease_status", data = person, test = FALSE)
+
+# Convert tableone object to a data frame
+table1_df <- as.data.frame(print(table1, printToggle = FALSE))
+
+# Create JAMA-style Table 1 using flextable
+jama_table <- flextable::flextable(table1_df) %>%
+  set_header_labels(
+    variable = "Characteristic",
+    level = "Category",
+    overall = "Overall",
+    "1" = "Disease Present",
+    "0" = "Disease Absent"
+  ) %>%
+  autofit()
+
+# Save the table to a Word document for submission
+doc <- read_docx() %>%
+  body_add_flextable(jama_table) %>%
+  body_add_par("Table 1: Baseline Characteristics", style = "heading 1")
+
+print(doc, target = "Table1_JAMA.docx")
+
+```
+
+### Earliest date
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+person <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+person <- person %>%
+  mutate(index_date = as.Date(index_date))
+
+# Find the earliest index_date
+earliest_date <- person %>%
+  summarise(earliest_index_date = min(index_date, na.rm = TRUE))
+
+# Display the result
+print(earliest_date)
+
+```
+
+# Part 1: Evaluation of the Kidney Failure Risk Equation (KFRE) with ALL OF US DATA: North American Equation
+
+## Bland_Altman_Race_Subgroup_Multi_Panel
+
+Different Scales
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)  
+library(parallel)
+library(doParallel)
+
+# Load data
+inrange_person_with_summary <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Step 1: Calculate the differences and averages between eGFR methods
+inrange_person_with_summary <- inrange_person_with_summary %>%
+  mutate(
+    diff_MDRD_ckd_epi_2009 = eGFR_MDRD - eGFR_ckd_epi_2009,
+    avg_MDRD_ckd_epi_2009 = (eGFR_MDRD + eGFR_ckd_epi_2009) / 2,
+    diff_MDRD_ckd_epi_2021 = eGFR_MDRD - eGFR_ckd_epi_2021,
+    avg_MDRD_ckd_epi_2021 = (eGFR_MDRD + eGFR_ckd_epi_2021) / 2,
+    diff_ckd_epi_2009_ckd_epi_2021 = eGFR_ckd_epi_2009 - eGFR_ckd_epi_2021,
+    avg_ckd_epi_2009_ckd_epi_2021 = (eGFR_ckd_epi_2009 + eGFR_ckd_epi_2021) / 2
+  )
+
+# Step 2: Function to create Bland-Altman plots with improved spacing
+create_bland_altman_plot <- function(data, avg_col, diff_col, title) {
+  mean_diff <- mean(data[[diff_col]], na.rm = TRUE)
+  sd_diff <- sd(data[[diff_col]], na.rm = TRUE)
+  upper_limit <- mean_diff + 1.96 * sd_diff
+  lower_limit <- mean_diff - 1.96 * sd_diff
+
+  ggplot(data, aes_string(x = avg_col, y = diff_col)) +
+    geom_point(alpha = 0.6, size = 1.5) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    geom_hline(yintercept = mean_diff, linetype = "dashed", color = "blue") +
+    geom_hline(yintercept = upper_limit, linetype = "dashed", color = "darkgreen") +
+    geom_hline(yintercept = lower_limit, linetype = "dashed", color = "darkgreen") +
+    labs(
+      title = title, 
+      x = "Average eGFR (mL/min/1.73 m²)", 
+      y = "Difference in eGFR (mL/min/1.73 m²)"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10),
+      plot.margin = margin(t = 15, r = 15, b = 15, l = 15)  # Add space around each plot
+    )
+}
+
+# Step 3: Function to generate plots for each race
+generate_race_plots <- function(race_data, race_label) {
+  list(
+    create_bland_altman_plot(race_data, "avg_MDRD_ckd_epi_2009", "diff_MDRD_ckd_epi_2009", paste("MDRD vs. CKD-EPI 2009 (", race_label, ")", sep = "")),
+    create_bland_altman_plot(race_data, "avg_MDRD_ckd_epi_2021", "diff_MDRD_ckd_epi_2021", paste("MDRD vs. CKD-EPI 2021 (", race_label, ")", sep = "")),
+    create_bland_altman_plot(race_data, "avg_ckd_epi_2009_ckd_epi_2021", "diff_ckd_epi_2009_ckd_epi_2021", paste("CKD-EPI 2009 vs. CKD-EPI 2021 (", race_label, ")", sep = ""))
+  )
+}
+
+# Step 4: Split data by race and generate plots
+plot_list <- list()
+races <- c("Black or African American", "White", "Asian", "Other")
+race_labels <- c("Black", "White", "Asian", "Other")
+
+for (i in seq_along(races)) {
+  race_data <- inrange_person_with_summary %>% filter(race == races[i])
+  if (nrow(race_data) > 0) { # Ensure data exists for the race group
+    race_plots <- generate_race_plots(race_data, race_labels[i])
+    plot_list <- c(plot_list, race_plots)
+  }
+}
+
+# Step 5: Arrange the plots in a multi-panel figure with enhanced spacing
+multi_panel_plot <- grid.arrange(
+  grobs = plot_list, 
+  ncol = 3,
+  heights = unit(c(1, 1, 1, 1), "null"),  # Add space between rows
+  padding = unit(2, "lines")               # Add extra padding between plots
+)
+
+# Step 6: Save the improved multi-panel plot as a high-resolution image
+ggsave("Bland_Altman_Race_Subgroup_Multi_Panel_Updated.png", 
+       multi_panel_plot, dpi = 300, width = 16, height = 12)
+
+# Display the multi-panel plot
+print(multi_panel_plot)
+
+```
+
+Varying scale
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)  
+library(parallel)
+library(doParallel)
+
+# Load data
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Step 1: Calculate the differences and averages between eGFR methods
+inrange_person_with_summary <- inrange_person_with_summary %>%
+  mutate(
+    diff_MDRD_ckd_epi_2009 = eGFR_MDRD - eGFR_ckd_epi_2009,
+    avg_MDRD_ckd_epi_2009 = (eGFR_MDRD + eGFR_ckd_epi_2009) / 2,
+    diff_MDRD_ckd_epi_2021 = eGFR_MDRD - eGFR_ckd_epi_2021,
+    avg_MDRD_ckd_epi_2021 = (eGFR_MDRD + eGFR_ckd_epi_2021) / 2,
+    diff_ckd_epi_2009_ckd_epi_2021 = eGFR_ckd_epi_2009 - eGFR_ckd_epi_2021,
+    avg_ckd_epi_2009_ckd_epi_2021 = (eGFR_ckd_epi_2009 + eGFR_ckd_epi_2021) / 2
+  )
+
+# Step 2: Function to create Bland-Altman plots with improved spacing and controlled scales
+create_bland_altman_plot <- function(data, avg_col, diff_col, title) {
+  mean_diff <- mean(data[[diff_col]], na.rm = TRUE)
+  sd_diff <- sd(data[[diff_col]], na.rm = TRUE)
+  upper_limit <- mean_diff + 1.96 * sd_diff
+  lower_limit <- mean_diff - 1.96 * sd_diff
+  
+  # Dynamic scaling logic
+  max_diff <- max(data[[diff_col]], na.rm = TRUE)
+  min_diff <- min(data[[diff_col]], na.rm = TRUE)
+  upper_scale_limit <- min(max_diff + 20, 450)
+  lower_scale_limit <- max(min_diff - 20, -50)  # Negative limit capped at -50
+
+  ggplot(data, aes_string(x = avg_col, y = diff_col)) +
+    geom_point(alpha = 0.6, size = 1.5) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    geom_hline(yintercept = mean_diff, linetype = "dashed", color = "blue") +
+    geom_hline(yintercept = upper_limit, linetype = "dashed", color = "darkgreen") +
+    geom_hline(yintercept = lower_limit, linetype = "dashed", color = "darkgreen") +
+    labs(
+      title = title, 
+      x = "Average eGFR (mL/min/1.73 m²)", 
+      y = "Difference in eGFR (mL/min/1.73 m²)"
+    ) +
+    ylim(lower_scale_limit, upper_scale_limit) +  # Dynamic scaling with controlled limits
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10),
+      plot.margin = margin(t = 15, r = 15, b = 15, l = 15)
+    )
+}
+
+# Step 3: Function to generate plots for each race
+generate_race_plots <- function(race_data, race_label) {
+  list(
+    create_bland_altman_plot(race_data, "avg_MDRD_ckd_epi_2009", "diff_MDRD_ckd_epi_2009", paste("MDRD vs. CKD-EPI 2009 (", race_label, ")", sep = "")),
+    create_bland_altman_plot(race_data, "avg_MDRD_ckd_epi_2021", "diff_MDRD_ckd_epi_2021", paste("MDRD vs. CKD-EPI 2021 (", race_label, ")", sep = "")),
+    create_bland_altman_plot(race_data, "avg_ckd_epi_2009_ckd_epi_2021", "diff_ckd_epi_2009_ckd_epi_2021", paste("CKD-EPI 2009 vs. CKD-EPI 2021 (", race_label, ")", sep = ""))
+  )
+}
+
+# Step 4: Split data by race and generate plots
+plot_list <- list()
+races <- c("Black or African American", "White", "Asian", "Other")
+race_labels <- c("Black", "White", "Asian", "Other")
+
+for (i in seq_along(races)) {
+  race_data <- inrange_person_with_summary %>% filter(race == races[i])
+  if (nrow(race_data) > 0) { 
+    race_plots <- generate_race_plots(race_data, race_labels[i])
+    plot_list <- c(plot_list, race_plots)
+  }
+}
+
+# Step 5: Arrange the plots in a multi-panel figure
+multi_panel_plot <- grid.arrange(
+  grobs = plot_list, 
+  ncol = 3,
+  heights = unit(c(1, 1, 1, 1), "null"),
+  padding = unit(2, "lines")
+)
+
+# Step 6: Save the updated multi-panel plot
+ggsave("Bland_Altman_Race_Subgroup_Multi_Panel_Updated.png", 
+       multi_panel_plot, dpi = 300, width = 16, height = 12)
+
+# Display the plot
+print(multi_panel_plot)
+
+```
+
+# Populations for assessment
+
+## Diabetic
+
+```{r}
+library(tidyverse)
+library(bigrquery)
+
+# This query represents dataset "Albumin data" for domain "person" and was generated for All of Us Controlled Tier Dataset v7
+dataset_61544765_person_sql <- paste("
+    SELECT
+        person.person_id,
+        p_gender_concept.concept_name as gender,
+        person.birth_datetime as date_of_birth,
+        p_race_concept.concept_name as race,
+        p_ethnicity_concept.concept_name as ethnicity,
+        p_sex_at_birth_concept.concept_name as sex_at_birth 
+    FROM
+        `person` person 
+    LEFT JOIN
+        `concept` p_gender_concept 
+            ON person.gender_concept_id = p_gender_concept.concept_id 
+    LEFT JOIN
+        `concept` p_race_concept 
+            ON person.race_concept_id = p_race_concept.concept_id 
+    LEFT JOIN
+        `concept` p_ethnicity_concept 
+            ON person.ethnicity_concept_id = p_ethnicity_concept.concept_id 
+    LEFT JOIN
+        `concept` p_sex_at_birth_concept 
+            ON person.sex_at_birth_concept_id = p_sex_at_birth_concept.concept_id  
+    WHERE
+        person.PERSON_ID IN (SELECT
+            distinct person_id  
+        FROM
+            `cb_search_person` cb_search_person  
+        WHERE
+            cb_search_person.person_id IN (SELECT
+                person_id 
+            FROM
+                `person` p 
+            WHERE
+                race_concept_id IN (8527, 8516, 2100000001, 8515, 903096, 2000000008, 45882607, 1177221, 38003615, 8557) ) 
+            AND cb_search_person.person_id IN (SELECT
+                criteria.person_id 
+            FROM
+                (SELECT
+                    DISTINCT person_id, entry_date, concept_id 
+                FROM
+                    `cb_search_all_events` 
+                WHERE
+                    (concept_id IN(SELECT
+                        DISTINCT c.concept_id 
+                    FROM
+                        `cb_criteria` c 
+                    JOIN
+                        (SELECT
+                            CAST(cr.id as string) AS id       
+                        FROM
+                            `cb_criteria` cr       
+                        WHERE
+                            concept_id IN (201820)       
+                            AND full_text LIKE '%_rank1]%'      ) a 
+                            ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                            OR c.path LIKE CONCAT('%.', a.id) 
+                            OR c.path LIKE CONCAT(a.id, '.%') 
+                            OR c.path = a.id) 
+                    WHERE
+                        is_standard = 1 
+                        AND is_selectable = 1) 
+                    AND is_standard = 1 )) criteria ) 
+            AND cb_search_person.person_id NOT IN (SELECT
+                criteria.person_id 
+            FROM
+                (SELECT
+                    DISTINCT person_id, entry_date, concept_id 
+                FROM
+                    `cb_search_all_events` 
+                WHERE
+                    (concept_id IN(SELECT
+                        DISTINCT c.concept_id 
+                    FROM
+                        `cb_criteria` c 
+                    JOIN
+                        (SELECT
+                            CAST(cr.id as string) AS id       
+                        FROM
+                            `cb_criteria` cr       
+                        WHERE
+                            concept_id IN (440508)       
+                            AND full_text LIKE '%_rank1]%'      ) a 
+                            ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                            OR c.path LIKE CONCAT('%.', a.id) 
+                            OR c.path LIKE CONCAT(a.id, '.%') 
+                            OR c.path = a.id) 
+                    WHERE
+                        is_standard = 1 
+                        AND is_selectable = 1) 
+                    AND is_standard = 1 )) criteria ) )", sep="")
+
+# Formulate a Cloud Storage destination path for the data exported from BigQuery.
+# NOTE: By default data exported multiple times on the same day will overwrite older copies.
+#       But data exported on a different days will write to a new location so that historical
+#       copies can be kept as the dataset definition is changed.
+person_61544765_path <- file.path(
+  Sys.getenv("WORKSPACE_BUCKET"),
+  "bq_exports",
+  Sys.getenv("OWNER_EMAIL"),
+  strftime(lubridate::now(), "%Y%m%d"),  # Comment out this line if you want the export to always overwrite.
+  "person_61544765",
+  "person_61544765_*.csv")
+message(str_glue('The data will be written to {person_61544765_path}. Use this path when reading ',
+                 'the data into your notebooks in the future.'))
+
+# Perform the query and export the dataset to Cloud Storage as CSV files.
+# NOTE: You only need to run `bq_table_save` once. After that, you can
+#       just read data from the CSVs in Cloud Storage.
+bq_table_save(
+  bq_dataset_query(Sys.getenv("WORKSPACE_CDR"), dataset_61544765_person_sql, billing = Sys.getenv("GOOGLE_PROJECT")),
+  person_61544765_path,
+  destination_format = "CSV")
+
+
+# Read the data directly from Cloud Storage into memory.
+# NOTE: Alternatively you can `gsutil -m cp {person_61544765_path}` to copy these files
+#       to the Jupyter disk.
+read_bq_export_from_workspace_bucket <- function(export_path) {
+  col_types <- cols(gender = col_character(), race = col_character(), ethnicity = col_character(), sex_at_birth = col_character())
+  bind_rows(
+    map(system2('gsutil', args = c('ls', export_path), stdout = TRUE, stderr = TRUE),
+        function(csv) {
+          message(str_glue('Loading {csv}.'))
+          chunk <- read_csv(pipe(str_glue('gsutil cat {csv}')), col_types = col_types, show_col_types = FALSE)
+          if (is.null(col_types)) {
+            col_types <- spec(chunk)
+          }
+          chunk
+        }))
+}
+dataset_61544765_person_df <- read_bq_export_from_workspace_bucket(person_61544765_path)
+
+dim(dataset_61544765_person_df)
+
+head(dataset_61544765_person_df, 5)
+```
+
+### In feature window diabetic population
+
+```{r}
+# Load dataset
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+library(dplyr)
+
+# Filter inrange_person_with_summary to keep only matching person_id
+diabetic_data <- inrange_person_with_summary %>%
+  semi_join(dataset_61544765_person_df, by = "person_id")
+
+# Summarize the number of cases and controls by race
+summary_by_race <- diabetic_data %>%
+  group_by(race) %>%
+  summarise(
+    cases = sum(disease_status == 1),
+    controls = sum(disease_status == 0)
+  )
+
+# Display the summary
+print(summary_by_race)
+
+```
+
+## 
+
+## Hypertensive
+
+```{r}
+library(tidyverse)
+library(bigrquery)
+
+# This query represents dataset "Albumin data" for domain "person" and was generated for All of Us Controlled Tier Dataset v7
+dataset_45468847_person_sql <- paste("
+    SELECT
+        person.person_id,
+        p_gender_concept.concept_name as gender,
+        person.birth_datetime as date_of_birth,
+        p_race_concept.concept_name as race,
+        p_ethnicity_concept.concept_name as ethnicity,
+        p_sex_at_birth_concept.concept_name as sex_at_birth 
+    FROM
+        `person` person 
+    LEFT JOIN
+        `concept` p_gender_concept 
+            ON person.gender_concept_id = p_gender_concept.concept_id 
+    LEFT JOIN
+        `concept` p_race_concept 
+            ON person.race_concept_id = p_race_concept.concept_id 
+    LEFT JOIN
+        `concept` p_ethnicity_concept 
+            ON person.ethnicity_concept_id = p_ethnicity_concept.concept_id 
+    LEFT JOIN
+        `concept` p_sex_at_birth_concept 
+            ON person.sex_at_birth_concept_id = p_sex_at_birth_concept.concept_id  
+    WHERE
+        person.PERSON_ID IN (SELECT
+            distinct person_id  
+        FROM
+            `cb_search_person` cb_search_person  
+        WHERE
+            cb_search_person.person_id IN (SELECT
+                person_id 
+            FROM
+                `person` p 
+            WHERE
+                race_concept_id IN (8527, 8516, 2100000001, 8515, 903096, 2000000008, 45882607, 1177221, 38003615, 8557) ) 
+            AND cb_search_person.person_id IN (SELECT
+                criteria.person_id 
+            FROM
+                (SELECT
+                    DISTINCT person_id, entry_date, concept_id 
+                FROM
+                    `cb_search_all_events` 
+                WHERE
+                    (concept_id IN(SELECT
+                        DISTINCT c.concept_id 
+                    FROM
+                        `cb_criteria` c 
+                    JOIN
+                        (SELECT
+                            CAST(cr.id as string) AS id       
+                        FROM
+                            `cb_criteria` cr       
+                        WHERE
+                            concept_id IN (316866)       
+                            AND full_text LIKE '%_rank1]%'      ) a 
+                            ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                            OR c.path LIKE CONCAT('%.', a.id) 
+                            OR c.path LIKE CONCAT(a.id, '.%') 
+                            OR c.path = a.id) 
+                    WHERE
+                        is_standard = 1 
+                        AND is_selectable = 1) 
+                    AND is_standard = 1 )) criteria ) 
+            AND cb_search_person.person_id NOT IN (SELECT
+                criteria.person_id 
+            FROM
+                (SELECT
+                    DISTINCT person_id, entry_date, concept_id 
+                FROM
+                    `cb_search_all_events` 
+                WHERE
+                    (concept_id IN(SELECT
+                        DISTINCT c.concept_id 
+                    FROM
+                        `cb_criteria` c 
+                    JOIN
+                        (SELECT
+                            CAST(cr.id as string) AS id       
+                        FROM
+                            `cb_criteria` cr       
+                        WHERE
+                            concept_id IN (440508)       
+                            AND full_text LIKE '%_rank1]%'      ) a 
+                            ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                            OR c.path LIKE CONCAT('%.', a.id) 
+                            OR c.path LIKE CONCAT(a.id, '.%') 
+                            OR c.path = a.id) 
+                    WHERE
+                        is_standard = 1 
+                        AND is_selectable = 1) 
+                    AND is_standard = 1 )) criteria ) )", sep="")
+
+# Formulate a Cloud Storage destination path for the data exported from BigQuery.
+# NOTE: By default data exported multiple times on the same day will overwrite older copies.
+#       But data exported on a different days will write to a new location so that historical
+#       copies can be kept as the dataset definition is changed.
+person_45468847_path <- file.path(
+  Sys.getenv("WORKSPACE_BUCKET"),
+  "bq_exports",
+  Sys.getenv("OWNER_EMAIL"),
+  strftime(lubridate::now(), "%Y%m%d"),  # Comment out this line if you want the export to always overwrite.
+  "person_45468847",
+  "person_45468847_*.csv")
+message(str_glue('The data will be written to {person_45468847_path}. Use this path when reading ',
+                 'the data into your notebooks in the future.'))
+
+# Perform the query and export the dataset to Cloud Storage as CSV files.
+# NOTE: You only need to run `bq_table_save` once. After that, you can
+#       just read data from the CSVs in Cloud Storage.
+bq_table_save(
+  bq_dataset_query(Sys.getenv("WORKSPACE_CDR"), dataset_45468847_person_sql, billing = Sys.getenv("GOOGLE_PROJECT")),
+  person_45468847_path,
+  destination_format = "CSV")
+
+
+# Read the data directly from Cloud Storage into memory.
+# NOTE: Alternatively you can `gsutil -m cp {person_45468847_path}` to copy these files
+#       to the Jupyter disk.
+read_bq_export_from_workspace_bucket <- function(export_path) {
+  col_types <- cols(gender = col_character(), race = col_character(), ethnicity = col_character(), sex_at_birth = col_character())
+  bind_rows(
+    map(system2('gsutil', args = c('ls', export_path), stdout = TRUE, stderr = TRUE),
+        function(csv) {
+          message(str_glue('Loading {csv}.'))
+          chunk <- read_csv(pipe(str_glue('gsutil cat {csv}')), col_types = col_types, show_col_types = FALSE)
+          if (is.null(col_types)) {
+            col_types <- spec(chunk)
+          }
+          chunk
+        }))
+}
+dataset_45468847_person_df <- read_bq_export_from_workspace_bucket(person_45468847_path)
+
+dim(dataset_45468847_person_df)
+
+head(dataset_45468847_person_df, 5)
+```
+
+### In feature window hypertensive
+
+```{r}
+# Load dataset
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+library(dplyr)
+
+# Filter inrange_person_with_summary to keep only matching person_id
+hypertensive_data <- inrange_person_with_summary %>%
+  semi_join(dataset_45468847_person_df, by = "person_id")
+
+# Summarize the number of cases and controls by race
+summary_by_race <- hypertensive_data %>%
+  group_by(race) %>%
+  summarise(
+    cases = sum(disease_status == 1),
+    controls = sum(disease_status == 0)
+  )
+
+# Display the summary
+print(summary_by_race)
+
+```
+
+## CKD Very High Risk
+
+```{r}
+# Load dataset
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+
+library(dplyr)
+
+# Very High Risk Group (MDRD)
+very_high_risk_MDRD <- inrange_person_with_summary %>%
+  filter(
+    (eGFR_MDRD < 30) |  # G4 and G5 are very high risk for all albumin levels
+    (eGFR_MDRD >= 30 & eGFR_MDRD < 45 & Albumin.Creatinine >= 300)  # G3b + Albumin ≥ 300
+  )
+
+# Very High Risk Group (CKD-EPI 2009)
+very_high_risk_CKD2009 <- inrange_person_with_summary %>%
+  filter(
+    (eGFR_ckd_epi_2009 < 30) |  # G4 and G5 are very high risk for all albumin levels
+    (eGFR_ckd_epi_2009 >= 30 & eGFR_ckd_epi_2009 < 45 & Albumin.Creatinine >= 300)  # G3b + Albumin ≥ 300
+  )
+
+# Very High Risk Group (CKD-EPI 2021)
+very_high_risk_CKD2021 <- inrange_person_with_summary %>%
+  filter(
+    (eGFR_ckd_epi_2021 < 30) |  # G4 and G5 are very high risk for all albumin levels
+    (eGFR_ckd_epi_2021 >= 30 & eGFR_ckd_epi_2021 < 45 & Albumin.Creatinine >= 300)  # G3b + Albumin ≥ 300
+  )
+
+# Display Counts for Each Risk Group
+cat("Very High Risk (MDRD) - Cases:", sum(very_high_risk_MDRD$disease_status == 1),
+    "| Controls:", sum(very_high_risk_MDRD$disease_status == 0), "\n")
+
+cat("Very High Risk (CKD-EPI 2009) - Cases:", sum(very_high_risk_CKD2009$disease_status == 1),
+    "| Controls:", sum(very_high_risk_CKD2009$disease_status == 0), "\n")
+
+cat("Very High Risk (CKD-EPI 2021) - Cases:", sum(very_high_risk_CKD2021$disease_status == 1),
+    "| Controls:", sum(very_high_risk_CKD2021$disease_status == 0), "\n")
+
+
+```
+
+## CKD High Risk
+
+```{r}
+# Load dataset
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+
+# High Risk Group
+high_risk_MDRD <- inrange_person_with_summary %>%
+  filter((eGFR_MDRD >= 30 & eGFR_MDRD < 45 & Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300) | (eGFR_MDRD < 30 & Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300))
+
+high_risk_CKD2009 <- inrange_person_with_summary %>%
+  filter((eGFR_ckd_epi_2009 >= 30 & eGFR_ckd_epi_2009 < 45 & Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300) | (eGFR_ckd_epi_2009 < 30 & Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300))
+
+high_risk_CKD2021 <- inrange_person_with_summary %>%
+  filter((eGFR_ckd_epi_2021 >= 30 & eGFR_ckd_epi_2021 < 45 & Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300) | (eGFR_ckd_epi_2021 < 30 & Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300))
+
+
+
+# Display Counts for Each Risk Group
+cat("High Risk (MDRD) - Cases:", sum(high_risk_MDRD$disease_status == 1),
+    "| Controls:", sum(high_risk_MDRD$disease_status == 0), "\n")
+
+cat("High Risk (CKD-EPI 2009) - Cases:", sum(high_risk_CKD2009$disease_status == 1),
+    "| Controls:", sum(high_risk_CKD2009$disease_status == 0), "\n")
+
+cat("High Risk (CKD-EPI 2021) - Cases:", sum(high_risk_CKD2021$disease_status == 1),
+    "| Controls:", sum(high_risk_CKD2021$disease_status == 0), "\n")
+
+
+```
+
+## CKD Medium Risk
+
+```{r}
+# Load dataset
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Medium Risk Group
+medium_risk_MDRD <- inrange_person_with_summary %>%
+  filter(eGFR_MDRD >= 45 & eGFR_MDRD <= 59 & 
+         Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300)
+
+medium_risk_CKD2009 <- inrange_person_with_summary %>%
+  filter(eGFR_ckd_epi_2009 >= 45 & eGFR_ckd_epi_2009 <= 59 & 
+         Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300)
+
+medium_risk_CKD2021 <- inrange_person_with_summary %>%
+  filter(eGFR_ckd_epi_2021 >= 45 & eGFR_ckd_epi_2021 <= 59 & 
+         Albumin.Creatinine >= 30 & Albumin.Creatinine <= 300)
+
+
+# Display Counts for Each Risk Group
+cat("Medium Risk (MDRD) - Cases:", sum(medium_risk_MDRD$disease_status == 1),
+    "| Controls:", sum(medium_risk_MDRD$disease_status == 0), "\n")
+
+cat("Medium Risk (CKD-EPI 2009) - Cases:", sum(medium_risk_CKD2009$disease_status == 1),
+    "| Controls:", sum(medium_risk_CKD2009$disease_status == 0), "\n")
+
+cat("Medium Risk (CKD-EPI 2021) - Cases:", sum(medium_risk_CKD2021$disease_status == 1),
+    "| Controls:", sum(medium_risk_CKD2021$disease_status == 0), "\n")
+
+
+```
+
+## CKD Low Risk
+
+```{r}
+# Load dataset
+inrange_person_with_summary <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+library(dplyr)
+
+# Low Risk Group (MDRD)
+low_risk_MDRD <- inrange_person_with_summary %>%
+  filter(
+    eGFR_MDRD >= 60 & Albumin.Creatinine < 30  # G1 and G2 with Albumin < 30 mg/g
+  )
+
+# Low Risk Group (CKD-EPI 2009)
+low_risk_CKD2009 <- inrange_person_with_summary %>%
+  filter(
+    eGFR_ckd_epi_2009 >= 60 & Albumin.Creatinine < 30  # G1 and G2 with Albumin < 30 mg/g
+  )
+
+# Low Risk Group (CKD-EPI 2021)
+low_risk_CKD2021 <- inrange_person_with_summary %>%
+  filter(
+    eGFR_ckd_epi_2021 >= 60 & Albumin.Creatinine < 30  # G1 and G2 with Albumin < 30 mg/g
+  )
+
+# Display Counts for Each Risk Group
+cat("Low Risk (MDRD) - Cases:", sum(low_risk_MDRD$disease_status == 1),
+    "| Controls:", sum(low_risk_MDRD$disease_status == 0), "\n")
+
+cat("Low Risk (CKD-EPI 2009) - Cases:", sum(low_risk_CKD2009$disease_status == 1),
+    "| Controls:", sum(low_risk_CKD2009$disease_status == 0), "\n")
+
+cat("Low Risk (CKD-EPI 2021) - Cases:", sum(low_risk_CKD2021$disease_status == 1),
+    "| Controls:", sum(low_risk_CKD2021$disease_status == 0), "\n")
+
+```
+
+# MDRD Population
+
+```{r}
+# Install doParallel package if it's not installed
+# install.packages("doParallel")
+
+# Load the parallel processing libraries
+library(doParallel)
+
+# Set up parallel backend to use multiple processors
+cores <- detectCores() - 1  # Detect the number of cores and use all but one
+cl <- makeCluster(cores)
+registerDoParallel(cl)
+
+# Load necessary libraries
+library(dplyr)
+library(survival)
+
+# Load dataset
+# inrange_person_with_summary <- diabetic_data
+inrange_person_with_summary <- low_risk_MDRD
+
+# Step 1: Select relevant columns and rename Albumin_Creatinine for consistency
+person_filtered_KFRE <- inrange_person_with_summary %>%
+  select(
+    person_id,
+    sex_at_birth,
+    eGFR_MDRD,
+    Albumin_Creatinine = `Albumin.Creatinine`,
+    age_precise,
+    race,
+    disease_status,
+    time_to_event
+    )
+
+# Step 2: Data preprocessing 
+person_filtered_KFRE <- person_filtered_KFRE %>%
+  mutate(
+    event = disease_status
+  ) %>%
+
+  # Log-transform Albumin/Creatinine ratio (ACR)
+  mutate(logACR = log(Albumin_Creatinine)) %>%
+  # Ensure complete cases (remove rows with missing data)
+  filter(complete.cases(.))
+
+
+# Filter out rows with non-NA time_to_event values
+case_control_time_to_event_counts <- person_filtered_KFRE %>%
+  filter(!is.na(time_to_event)) %>%  # Keep only rows with non-NA time_to_event
+  group_by(disease_status) %>%  # Assuming "disease_status" column indicates cases and controls
+  summarise(count = n())  # Count the number of rows in each group
+
+# Print the result
+print("Number of cases and controls with non-NA time_to_event values:")
+print(case_control_time_to_event_counts)
+
+
+# Step 3: Verify summary statistics for eGFR and Albumin/Creatinine
+summary(person_filtered_KFRE$eGFR_value)
+summary(person_filtered_KFRE$Albumin_Creatinine)
+
+# Check how many records are retained after filtering
+cat("Number of records after filtering:", nrow(person_filtered_KFRE), "\n")
+
+# Perform a complete case analysis
+initial_row_count <- nrow(person_filtered_KFRE)
+
+complete_cases <- person_filtered_KFRE %>%
+  filter(complete.cases(.))
+
+final_row_count <- nrow(complete_cases)
+
+# Check if any rows have been removed
+rows_removed <- initial_row_count - final_row_count
+
+if (rows_removed > 0) {
+  cat(rows_removed, "rows have been removed during the complete case analysis.\n")
+} else {
+  cat("No rows have been removed during the complete case analysis.\n")
+}
+
+# Report the number of complete cases
+num_complete_cases <- nrow(complete_cases)
+cat("Number of complete cases:", num_complete_cases, "\n")
+
+# Remove any rows with NA in time_to_event or disease_status
+complete_cases <- complete_cases %>%
+  filter(!is.na(time_to_event) & !is.na(disease_status))
+
+# Check the event distribution
+cat("Event distribution (disease_status):\n")
+print(table(complete_cases$disease_status))
+
+# Step 4: Define the formula for calculating βsum (log hazard)
+calculate_beta_sum <- function(age, sex, eGFR, logACR) {
+  (-0.2201 * (age / 10 - 7.036)) +
+  (0.2467 * (ifelse(sex == "Male", 1, 0) - 0.5642)) -
+  (0.5567 * (eGFR / 5 - 7.222)) +
+  (0.4510 * (logACR - 5.137))
+}
+
+# Apply the formula to calculate βsum
+complete_cases <- complete_cases %>%
+  mutate(beta_sum = calculate_beta_sum(age_precise, sex_at_birth, eGFR_MDRD, logACR))
+
+# Remove any rows with infinite or NA beta_sum
+complete_cases <- complete_cases %>%
+  filter(is.finite(beta_sum) & !is.na(beta_sum))
+
+# Step 5: Calculate the risk for two and five years using the updated formulas
+complete_cases <- complete_cases %>%
+  mutate(
+    risk_2_years = 100 * (1 - 0.975^exp(beta_sum)),  # Two-Year Risk calculation
+    risk_5_years = 100 * (1 - 0.9240^exp(beta_sum))  # Five-Year Risk calculation
+  )
+
+# Save the data before filtering
+before_filtering <- complete_cases
+
+# Step 6: Apply the filtering to create consistent_data
+consistent_data <- complete_cases %>%
+  filter(!is.na(risk_5_years) & !is.na(risk_2_years))
+
+# Step 7: Define and create the 2-year and 5-year outcomes based on disease_status and time_to_event
+consistent_data <- consistent_data %>%
+  mutate(
+    outcome_2_years = ifelse(disease_status == 1 & time_to_event <= 2 * 365.25, 1, 0),
+    outcome_5_years = ifelse(disease_status == 1 & time_to_event <= 5 * 365.25, 1, 0)
+  )
+
+# Find the rows that were removed by comparing before and after datasets
+removed_rows <- anti_join(before_filtering, consistent_data, by = "person_id")
+
+# Print the removed rows
+if (nrow(removed_rows) > 0) {
+  cat("Rows that were removed during filtering:\n")
+  print(removed_rows)
+} else {
+  cat("No rows were removed during filtering.\n")
+}
+
+# Step 8: Verify the risk values
+summary(consistent_data$risk_5_years)
+summary(consistent_data$risk_2_years)
+
+# Count the number of person_id entries with event == 1 and event == 0
+event_count <- consistent_data %>%
+  group_by(event) %>%
+  summarise(count = n_distinct(person_id))
+
+# Print the results
+cat("Number of person_id with event == 1:", event_count$count[event_count$event == 1], "\n")
+cat("Number of person_id with event == 0:", event_count$count[event_count$event == 0], "\n")
+
+# Check the event distribution for the 2-year and 5-year outcomes
+cat("\n2-Year Outcome Distribution:\n")
+print(table(consistent_data$outcome_2_years))
+
+cat("\n5-Year Outcome Distribution:\n")
+print(table(consistent_data$outcome_5_years))
+
+
+# Evaluation
+# Load necessary libraries
+library(dplyr)
+library(pROC)
+library(survival)
+library(foreach)
+library(doParallel)
+library(ggplot2)
+
+# Function to calculate metrics with bootstrapping and specificity adjustment
+calculate_metrics_with_bootstrap <- function(data, risk_col, outcome_col, time_col, time_limit, n_bootstrap = 5000) {
+  
+  # Record the start time
+  start_time <- Sys.time()
+  
+  # Apply censoring: keep all data but treat events beyond the time limit as censored
+  data_filtered <- data %>%
+    mutate(
+      censored_time = pmin(!!sym(time_col), time_limit * 365),
+      event_status = ifelse(!!sym(outcome_col) == 1 & !!sym(time_col) <= time_limit * 365, 1, 0)
+    )
+  
+  # Filter out rows with missing or invalid data
+  data_filtered <- data_filtered %>%
+    filter(!is.na(!!sym(risk_col)) & !is.na(event_status) & !is.na(censored_time))
+  
+  # If no events or no controls exist in the data, return NA
+  if (length(unique(data_filtered$event_status)) < 2) {
+    return(list(
+      AUC = NA, AUC_Lower = NA, AUC_Upper = NA, C_Statistic = NA,
+      C_Stat_Lower = NA, C_Stat_Upper = NA, Sensitivity = NA,
+      Specificity = NA, PPV = NA, NPV = NA, Optimal_Cutoff = NA,
+      Cutoff_Method = "Not applicable", Cases = NA, Controls = NA
+    ))
+  }
+  
+  # Calculate ROC and AUC
+  roc_curve <- roc(data_filtered$event_status, data_filtered[[risk_col]], levels = c(0, 1), direction = "<")
+  auc_value <- as.numeric(auc(roc_curve))
+  
+  # Try to find the cutoff for specificity target 0.9
+  cutoff_method <- "Specificity 0.9"
+  optimal_cutoff <- tryCatch(
+    {
+      coords(roc_curve, x = 0.9, input = "specificity", ret = "threshold", transpose = TRUE)[1]
+    },
+    error = function(e) {
+      NA
+    }
+  )
+  
+  # If the cutoff for specificity 0.9 is NA, try specificity 0.8
+  if (is.na(optimal_cutoff)) {
+    cutoff_method <- "Specificity 0.8"
+    optimal_cutoff <- tryCatch(
+      {
+        coords(roc_curve, x = 0.8, input = "specificity", ret = "threshold", transpose = TRUE)[1]
+      },
+      error = function(e) {
+        NA
+      }
+    )
+  }
+  
+  # If the cutoff for specificity 0.8 is also NA, use the optimal cutoff
+  if (is.na(optimal_cutoff)) {
+    cutoff_method <- "Optimal Cutoff"
+    optimal_cutoff <- tryCatch(
+      {
+        coords(roc_curve, x = "best", best.method = "closest.topleft", ret = "threshold", transpose = TRUE)[1]
+      },
+      error = function(e) {
+        NA
+      }
+    )
+  }
+  
+  # If the optimal_cutoff is not valid, return NA for metrics
+  if (is.na(optimal_cutoff)) {
+    return(list(
+      AUC = auc_value, AUC_Lower = NA, AUC_Upper = NA, C_Statistic = NA,
+      C_Stat_Lower = NA, C_Stat_Upper = NA, Sensitivity = NA,
+      Specificity = NA, PPV = NA, NPV = NA, Optimal_Cutoff = NA,
+      Cutoff_Method = "Failed", Cases = sum(data_filtered$event_status == 1),
+      Controls = sum(data_filtered$event_status == 0)
+    ))
+  }
+
+  # Calculate predictions based on the new cutoff
+  pred_class <- ifelse(data_filtered[[risk_col]] >= optimal_cutoff, 1, 0)
+
+  # Calculate confusion matrix statistics based on the new cutoff
+  confusion_mat <- table(Predicted = pred_class, Actual = data_filtered$event_status)
+
+  # If confusion matrix is not 2x2, set metrics to NA
+  if (!all(c(0, 1) %in% rownames(confusion_mat)) || !all(c(0, 1) %in% colnames(confusion_mat))) {
+    sensitivity <- NA
+    specificity <- NA
+    ppv <- NA
+    npv <- NA
+  } else {
+    sensitivity <- confusion_mat[2, 2] / sum(confusion_mat[, 2])
+    specificity <- confusion_mat[1, 1] / sum(confusion_mat[, 1])
+    ppv <- confusion_mat[2, 2] / sum(confusion_mat[2, ])
+    npv <- confusion_mat[1, 1] / sum(confusion_mat[1, ])
+  }
+
+  # Bootstrapping AUC and C-statistic for confidence intervals
+  auc_values <- numeric(n_bootstrap)
+  c_stat_values <- numeric(n_bootstrap)
+
+  bootstrapped_results <- foreach(i = 1:n_bootstrap, .combine = rbind, .packages = c("pROC", "survival")) %dopar% {
+    bootstrap_sample <- data_filtered[sample(1:nrow(data_filtered), replace = TRUE), ]
+
+    if (length(unique(bootstrap_sample$event_status)) < 2) {
+      return(c(NA, NA))
+    }
+
+    roc_curve <- roc(bootstrap_sample$event_status, bootstrap_sample[[risk_col]])
+    auc_val <- as.numeric(auc(roc_curve))
+
+    cox_model_boot <- coxph(Surv(bootstrap_sample$censored_time, bootstrap_sample$event_status) ~ bootstrap_sample[[risk_col]], data = bootstrap_sample)
+    c_stat_val <- as.numeric(summary(cox_model_boot)$concordance[1])
+
+    return(c(auc_val, c_stat_val))
+  }
+
+  auc_values <- bootstrapped_results[, 1]
+  c_stat_values <- bootstrapped_results[, 2]
+
+  # Calculate 95% confidence intervals
+  auc_ci <- quantile(auc_values[!is.na(auc_values)], probs = c(0.025, 0.975), na.rm = TRUE)
+  c_stat_ci <- quantile(c_stat_values[!is.na(c_stat_values)], probs = c(0.025, 0.975), na.rm = TRUE)
+
+  # Calculate Harrell's C-statistic for the full dataset
+  cox_model <- coxph(Surv(censored_time, event_status) ~ data_filtered[[risk_col]], data = data_filtered)
+  c_stat <- as.numeric(summary(cox_model)$concordance[1])
+
+  # Record the end time
+  end_time <- Sys.time()
+  total_runtime <- end_time - start_time
+
+  message("Number of bootstrap iterations run:", n_bootstrap)
+  message("Total runtime for the bootstrapping process:", total_runtime, "seconds")
+
+  # Return the metrics
+  return(list(
+    AUC = auc_value, AUC_Lower = auc_ci[1], AUC_Upper = auc_ci[2], 
+    C_Statistic = c_stat, C_Stat_Lower = c_stat_ci[1], C_Stat_Upper = c_stat_ci[2],
+    Sensitivity = sensitivity, Specificity = specificity, PPV = ppv,
+    NPV = npv, Optimal_Cutoff = optimal_cutoff, Cutoff_Method = cutoff_method,
+    Cases = sum(data_filtered$event_status == 1), Controls = sum(data_filtered$event_status == 0)
+  ))
+}
+
+# Function to summarize metrics for each racial group
+summarize_risk_metrics <- function(data, race_label, time_limit, n_bootstrap = 5000) {
+  metrics <- calculate_metrics_with_bootstrap(data, paste0("risk_", time_limit, "_years"), paste0("outcome_", time_limit, "_years"), "time_to_event", time_limit, n_bootstrap)
+  
+  return(data.frame(
+    Race = race_label,
+    Time_Horizon = paste0(time_limit, " Years"),
+    AUC = metrics$AUC,
+    AUC_Lower_CI = metrics$AUC_Lower,
+    AUC_Upper_CI = metrics$AUC_Upper,
+    Harrell_C_Statistic = metrics$C_Statistic,
+    C_Stat_Lower_CI = metrics$C_Stat_Lower,
+    C_Stat_Upper_CI = metrics$C_Stat_Upper,
+    Sensitivity = metrics$Sensitivity,
+    Specificity = metrics$Specificity,
+    PPV = metrics$PPV,
+    NPV = metrics$NPV,
+    Optimal_Cutoff = metrics$Optimal_Cutoff,
+    Cutoff_Method = metrics$Cutoff_Method,
+    Cases = metrics$Cases,
+    Controls = metrics$Controls
+  ))
+}
+
+# Evaluate metrics for each racial group and time horizon
+results_all_2yr <- summarize_risk_metrics(consistent_data, "All Races", 2, n_bootstrap = 5000)
+results_all_5yr <- summarize_risk_metrics(consistent_data, "All Races", 5, n_bootstrap = 5000)
+results_black_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Black or African American"), "Black or African American", 2, n_bootstrap = 5000)
+results_black_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Black or African American"), "Black or African American", 5, n_bootstrap = 5000)
+results_white_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "White"), "White", 2, n_bootstrap = 5000)
+results_white_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "White"), "White", 5, n_bootstrap = 5000)
+results_asian_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Asian"), "Asian", 2, n_bootstrap = 5000)
+results_asian_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Asian"), "Asian", 5, n_bootstrap = 5000)
+
+results_other_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Other"), "Other", 2, n_bootstrap = 5000)
+results_other_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Other"), "Other", 5, n_bootstrap = 5000)
+
+
+# Combine results including "All Races" for the final table
+final_results <- bind_rows(
+  results_all_2yr, results_all_5yr,
+  results_black_2yr, results_black_5yr,
+  results_white_2yr, results_white_5yr,
+  results_asian_2yr, results_asian_5yr,
+  results_other_2yr, results_other_5yr
+)
+
+# Exclude "All Races" for the forest plot
+final_results_filtered_MDRD <- final_results %>%
+  filter(Race != "All Races")
+
+# Display the final results table including "All Races"
+print(final_results)
+
+# Save the final_results table as a CSV file
+write.csv(final_results, "low-risk-mdrd-results.csv", row.names = FALSE)
+
+
+# Function to plot forest plot for metrics
+plot_forest <- function(results_df, metric, lower_ci, upper_ci, title, reference_line) {
+  ggplot(results_df, aes_string(x = metric, y = "Race")) +
+    geom_point(size = 3, shape = 16, color = "blue") +  # Metric point estimates
+    geom_errorbarh(aes_string(xmin = lower_ci, xmax = upper_ci), height = 0.2, color = "black") +  # 95% CI
+    geom_vline(xintercept = reference_line, linetype = "dashed", color = "red") +  # Reference line
+    facet_wrap(~ Time_Horizon, scales = "free_y") +  # Separate panels for each time horizon
+    labs(
+      title = title,
+      x = metric,
+      y = "Race"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 14, face = "bold"),
+      axis.text.x = element_text(size = 14),
+      strip.text = element_text(size = 23, face = "bold"),
+      panel.spacing = unit(1, "lines"),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+}
+
+# Plot the forest plots for AUC and Harrell's C-statistic using the filtered data
+forest_plot_auc <- plot_forest(final_results_filtered_MDRD, "AUC", "AUC_Lower_CI", "AUC_Upper_CI", "", reference_line = 0.5)
+forest_plot_cstat <- plot_forest(final_results_filtered_MDRD, "Harrell_C_Statistic", "C_Stat_Lower_CI", "C_Stat_Upper_CI", "", reference_line = 0.5)
+
+# Display the forest plots
+print(forest_plot_auc)
+print(forest_plot_cstat)
+
+# Save the AUC forest plot
+ggsave("MDRD_VHR_forest_plot_auc_filtered.png", plot = forest_plot_auc, width = 10, height = 8, dpi = 300)
+
+# Save the Harrell's C-statistic forest plot
+ggsave("MDRD_VHR_forest_plot_cstat_filtered.png", plot = forest_plot_cstat, width = 10, height = 8, dpi = 300)
+
+# Stop the parallel backend after use
+stopCluster(cl)
+```
+
+# CKD-EPI 2009 Population
+
+```{r}
+# Install doParallel package if it's not installed
+# install.packages("doParallel")
+
+# Load the parallel processing libraries
+library(doParallel)
+
+# Set up parallel backend to use multiple processors
+cores <- detectCores() - 1  # Detect the number of cores and use all but one
+cl <- makeCluster(cores)
+registerDoParallel(cl)
+
+# Load necessary libraries
+library(dplyr)
+library(survival)
+
+inrange_person_with_summary <- low_risk_CKD2009
+
+# Step 1: Select relevant columns and rename Albumin_Creatinine for consistency
+person_filtered_KFRE <- inrange_person_with_summary %>%
+  select(
+    person_id,
+    sex_at_birth,
+    eGFR_ckd_epi_2009,
+    Albumin_Creatinine = `Albumin.Creatinine`,
+    age_precise,
+    race,
+    disease_status,
+    time_to_event
+  )
+
+
+# Step 2: Data preprocessing and filtering based on the combination of eGFR and ACR for low-risk group
+person_filtered_KFRE <- person_filtered_KFRE %>%
+  mutate(
+    event = disease_status
+  ) %>%
+
+  # Log-transform Albumin/Creatinine ratio (ACR)
+  mutate(logACR = log(Albumin_Creatinine)) %>%
+  # Ensure complete cases (remove rows with missing data)
+  filter(complete.cases(.))
+
+
+# Filter out rows with non-NA time_to_event values
+case_control_time_to_event_counts <- person_filtered_KFRE %>%
+  filter(!is.na(time_to_event)) %>%  # Keep only rows with non-NA time_to_event
+  group_by(disease_status) %>%  # Assuming "disease_status" column indicates cases and controls
+  summarise(count = n())  # Count the number of rows in each group
+
+# Print the result
+print("Number of cases and controls with non-NA time_to_event values:")
+print(case_control_time_to_event_counts)
+
+
+# Step 3: Verify summary statistics for eGFR and Albumin/Creatinine
+summary(person_filtered_KFRE$eGFR_value)
+summary(person_filtered_KFRE$Albumin_Creatinine)
+
+# Check how many records are retained after filtering
+cat("Number of records after filtering:", nrow(person_filtered_KFRE), "\n")
+
+# Perform a complete case analysis
+initial_row_count <- nrow(person_filtered_KFRE)
+
+complete_cases <- person_filtered_KFRE %>%
+  filter(complete.cases(.))
+
+final_row_count <- nrow(complete_cases)
+
+# Check if any rows have been removed
+rows_removed <- initial_row_count - final_row_count
+
+if (rows_removed > 0) {
+  cat(rows_removed, "rows have been removed during the complete case analysis.\n")
+} else {
+  cat("No rows have been removed during the complete case analysis.\n")
+}
+
+# Report the number of complete cases
+num_complete_cases <- nrow(complete_cases)
+cat("Number of complete cases:", num_complete_cases, "\n")
+
+# Remove any rows with NA in time_to_event or disease_status
+complete_cases <- complete_cases %>%
+  filter(!is.na(time_to_event) & !is.na(disease_status))
+
+# Check the event distribution
+cat("Event distribution (disease_status):\n")
+print(table(complete_cases$disease_status))
+
+# Step 4: Define the formula for calculating βsum (log hazard)
+calculate_beta_sum <- function(age, sex, eGFR, logACR) {
+  (-0.2201 * (age / 10 - 7.036)) +
+  (0.2467 * (ifelse(sex == "Male", 1, 0) - 0.5642)) -
+  (0.5567 * (eGFR / 5 - 7.222)) +
+  (0.4510 * (logACR - 5.137))
+}
+
+# Apply the formula to calculate βsum
+complete_cases <- complete_cases %>%
+  mutate(beta_sum = calculate_beta_sum(age_precise, sex_at_birth, eGFR_ckd_epi_2009, logACR))
+
+# Remove any rows with infinite or NA beta_sum
+complete_cases <- complete_cases %>%
+  filter(is.finite(beta_sum) & !is.na(beta_sum))
+
+# Step 5: Calculate the risk for two and five years using the updated formulas
+complete_cases <- complete_cases %>%
+  mutate(
+    risk_2_years = 100 * (1 - 0.975^exp(beta_sum)),  # Two-Year Risk calculation
+    risk_5_years = 100 * (1 - 0.9240^exp(beta_sum))  # Five-Year Risk calculation
+  )
+
+# Save the data before filtering
+before_filtering <- complete_cases
+
+# Step 6: Apply the filtering to create consistent_data
+consistent_data <- complete_cases %>%
+  filter(!is.na(risk_5_years) & !is.na(risk_2_years))
+
+# Step 7: Define and create the 2-year and 5-year outcomes based on disease_status and time_to_event
+consistent_data <- consistent_data %>%
+  mutate(
+    outcome_2_years = ifelse(disease_status == 1 & time_to_event <= 2 * 365.25, 1, 0),
+    outcome_5_years = ifelse(disease_status == 1 & time_to_event <= 5 * 365.25, 1, 0)
+  )
+
+# Find the rows that were removed by comparing before and after datasets
+removed_rows <- anti_join(before_filtering, consistent_data, by = "person_id")
+
+# Print the removed rows
+if (nrow(removed_rows) > 0) {
+  cat("Rows that were removed during filtering:\n")
+  print(removed_rows)
+} else {
+  cat("No rows were removed during filtering.\n")
+}
+
+# Step 8: Verify the risk values
+summary(consistent_data$risk_5_years)
+summary(consistent_data$risk_2_years)
+
+# Count the number of person_id entries with event == 1 and event == 0
+event_count <- consistent_data %>%
+  group_by(event) %>%
+  summarise(count = n_distinct(person_id))
+
+# Print the results
+cat("Number of person_id with event == 1:", event_count$count[event_count$event == 1], "\n")
+cat("Number of person_id with event == 0:", event_count$count[event_count$event == 0], "\n")
+
+# Check the event distribution for the 2-year and 5-year outcomes
+cat("\n2-Year Outcome Distribution:\n")
+print(table(consistent_data$outcome_2_years))
+
+cat("\n5-Year Outcome Distribution:\n")
+print(table(consistent_data$outcome_5_years))
+
+# Evaluation
+# Load necessary libraries
+library(dplyr)
+library(pROC)
+library(survival)
+library(foreach)
+library(doParallel)
+library(ggplot2)
+
+# Function to calculate metrics with bootstrapping and specificity adjustment
+calculate_metrics_with_bootstrap <- function(data, risk_col, outcome_col, time_col, time_limit, n_bootstrap = 5000) {
+  
+  # Record the start time
+  start_time <- Sys.time()
+  
+  # Apply censoring: keep all data but treat events beyond the time limit as censored
+  data_filtered <- data %>%
+    mutate(
+      censored_time = pmin(!!sym(time_col), time_limit * 365),
+      event_status = ifelse(!!sym(outcome_col) == 1 & !!sym(time_col) <= time_limit * 365, 1, 0)
+    )
+  
+  # Filter out rows with missing or invalid data
+  data_filtered <- data_filtered %>%
+    filter(!is.na(!!sym(risk_col)) & !is.na(event_status) & !is.na(censored_time))
+  
+  # If no events or no controls exist in the data, return NA
+  if (length(unique(data_filtered$event_status)) < 2) {
+    return(list(
+      AUC = NA, AUC_Lower = NA, AUC_Upper = NA, C_Statistic = NA,
+      C_Stat_Lower = NA, C_Stat_Upper = NA, Sensitivity = NA,
+      Specificity = NA, PPV = NA, NPV = NA, Optimal_Cutoff = NA,
+      Cutoff_Method = "Not applicable", Cases = NA, Controls = NA
+    ))
+  }
+  
+  # Calculate ROC and AUC
+  roc_curve <- roc(data_filtered$event_status, data_filtered[[risk_col]], levels = c(0, 1), direction = "<")
+  auc_value <- as.numeric(auc(roc_curve))
+  
+  # Try to find the cutoff for specificity target 0.9
+  cutoff_method <- "Specificity 0.9"
+  optimal_cutoff <- tryCatch(
+    {
+      coords(roc_curve, x = 0.9, input = "specificity", ret = "threshold", transpose = TRUE)[1]
+    },
+    error = function(e) {
+      NA
+    }
+  )
+  
+  # If the cutoff for specificity 0.9 is NA, try specificity 0.8
+  if (is.na(optimal_cutoff)) {
+    cutoff_method <- "Specificity 0.8"
+    optimal_cutoff <- tryCatch(
+      {
+        coords(roc_curve, x = 0.8, input = "specificity", ret = "threshold", transpose = TRUE)[1]
+      },
+      error = function(e) {
+        NA
+      }
+    )
+  }
+  
+  # If the cutoff for specificity 0.8 is also NA, use the optimal cutoff
+  if (is.na(optimal_cutoff)) {
+    cutoff_method <- "Optimal Cutoff"
+    optimal_cutoff <- tryCatch(
+      {
+        coords(roc_curve, x = "best", best.method = "closest.topleft", ret = "threshold", transpose = TRUE)[1]
+      },
+      error = function(e) {
+        NA
+      }
+    )
+  }
+  
+  # If the optimal_cutoff is not valid, return NA for metrics
+  if (is.na(optimal_cutoff)) {
+    return(list(
+      AUC = auc_value, AUC_Lower = NA, AUC_Upper = NA, C_Statistic = NA,
+      C_Stat_Lower = NA, C_Stat_Upper = NA, Sensitivity = NA,
+      Specificity = NA, PPV = NA, NPV = NA, Optimal_Cutoff = NA,
+      Cutoff_Method = "Failed", Cases = sum(data_filtered$event_status == 1),
+      Controls = sum(data_filtered$event_status == 0)
+    ))
+  }
+
+  # Calculate predictions based on the new cutoff
+  pred_class <- ifelse(data_filtered[[risk_col]] >= optimal_cutoff, 1, 0)
+
+  # Calculate confusion matrix statistics based on the new cutoff
+  confusion_mat <- table(Predicted = pred_class, Actual = data_filtered$event_status)
+
+  # If confusion matrix is not 2x2, set metrics to NA
+  if (!all(c(0, 1) %in% rownames(confusion_mat)) || !all(c(0, 1) %in% colnames(confusion_mat))) {
+    sensitivity <- NA
+    specificity <- NA
+    ppv <- NA
+    npv <- NA
+  } else {
+    sensitivity <- confusion_mat[2, 2] / sum(confusion_mat[, 2])
+    specificity <- confusion_mat[1, 1] / sum(confusion_mat[, 1])
+    ppv <- confusion_mat[2, 2] / sum(confusion_mat[2, ])
+    npv <- confusion_mat[1, 1] / sum(confusion_mat[1, ])
+  }
+
+  # Bootstrapping AUC and C-statistic for confidence intervals
+  auc_values <- numeric(n_bootstrap)
+  c_stat_values <- numeric(n_bootstrap)
+
+  bootstrapped_results <- foreach(i = 1:n_bootstrap, .combine = rbind, .packages = c("pROC", "survival")) %dopar% {
+    bootstrap_sample <- data_filtered[sample(1:nrow(data_filtered), replace = TRUE), ]
+
+    if (length(unique(bootstrap_sample$event_status)) < 2) {
+      return(c(NA, NA))
+    }
+
+    roc_curve <- roc(bootstrap_sample$event_status, bootstrap_sample[[risk_col]])
+    auc_val <- as.numeric(auc(roc_curve))
+
+    cox_model_boot <- coxph(Surv(bootstrap_sample$censored_time, bootstrap_sample$event_status) ~ bootstrap_sample[[risk_col]], data = bootstrap_sample)
+    c_stat_val <- as.numeric(summary(cox_model_boot)$concordance[1])
+
+    return(c(auc_val, c_stat_val))
+  }
+
+  auc_values <- bootstrapped_results[, 1]
+  c_stat_values <- bootstrapped_results[, 2]
+
+  # Calculate 95% confidence intervals
+  auc_ci <- quantile(auc_values[!is.na(auc_values)], probs = c(0.025, 0.975), na.rm = TRUE)
+  c_stat_ci <- quantile(c_stat_values[!is.na(c_stat_values)], probs = c(0.025, 0.975), na.rm = TRUE)
+
+  # Calculate Harrell's C-statistic for the full dataset
+  cox_model <- coxph(Surv(censored_time, event_status) ~ data_filtered[[risk_col]], data = data_filtered)
+  c_stat <- as.numeric(summary(cox_model)$concordance[1])
+
+  # Record the end time
+  end_time <- Sys.time()
+  total_runtime <- end_time - start_time
+
+  message("Number of bootstrap iterations run:", n_bootstrap)
+  message("Total runtime for the bootstrapping process:", total_runtime, "seconds")
+
+  # Return the metrics
+  return(list(
+    AUC = auc_value, AUC_Lower = auc_ci[1], AUC_Upper = auc_ci[2], 
+    C_Statistic = c_stat, C_Stat_Lower = c_stat_ci[1], C_Stat_Upper = c_stat_ci[2],
+    Sensitivity = sensitivity, Specificity = specificity, PPV = ppv,
+    NPV = npv, Optimal_Cutoff = optimal_cutoff, Cutoff_Method = cutoff_method,
+    Cases = sum(data_filtered$event_status == 1), Controls = sum(data_filtered$event_status == 0)
+  ))
+}
+
+# Function to summarize metrics for each racial group
+summarize_risk_metrics <- function(data, race_label, time_limit, n_bootstrap = 5000) {
+  metrics <- calculate_metrics_with_bootstrap(data, paste0("risk_", time_limit, "_years"), paste0("outcome_", time_limit, "_years"), "time_to_event", time_limit, n_bootstrap)
+  
+  return(data.frame(
+    Race = race_label,
+    Time_Horizon = paste0(time_limit, " Years"),
+    AUC = metrics$AUC,
+    AUC_Lower_CI = metrics$AUC_Lower,
+    AUC_Upper_CI = metrics$AUC_Upper,
+    Harrell_C_Statistic = metrics$C_Statistic,
+    C_Stat_Lower_CI = metrics$C_Stat_Lower,
+    C_Stat_Upper_CI = metrics$C_Stat_Upper,
+    Sensitivity = metrics$Sensitivity,
+    Specificity = metrics$Specificity,
+    PPV = metrics$PPV,
+    NPV = metrics$NPV,
+    Optimal_Cutoff = metrics$Optimal_Cutoff,
+    Cutoff_Method = metrics$Cutoff_Method,
+    Cases = metrics$Cases,
+    Controls = metrics$Controls
+  ))
+}
+
+# Evaluate metrics for each racial group and time horizon
+results_all_2yr <- summarize_risk_metrics(consistent_data, "All Races", 2, n_bootstrap = 5000)
+results_all_5yr <- summarize_risk_metrics(consistent_data, "All Races", 5, n_bootstrap = 5000)
+results_black_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Black or African American"), "Black or African American", 2, n_bootstrap = 5000)
+results_black_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Black or African American"), "Black or African American", 5, n_bootstrap = 5000)
+results_white_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "White"), "White", 2, n_bootstrap = 5000)
+results_white_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "White"), "White", 5, n_bootstrap = 5000)
+results_asian_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Asian"), "Asian", 2, n_bootstrap = 5000)
+results_asian_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Asian"), "Asian", 5, n_bootstrap = 5000)
+
+results_other_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Other"), "Other", 2, n_bootstrap = 5000)
+results_other_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Other"), "Other", 5, n_bootstrap = 5000)
+
+
+# Combine results including "All Races" for the final table
+final_results <- bind_rows(
+  results_all_2yr, results_all_5yr,
+  results_black_2yr, results_black_5yr,
+  results_white_2yr, results_white_5yr,
+  results_asian_2yr, results_asian_5yr,
+  results_other_2yr, results_other_5yr
+
+)
+
+# Exclude "All Races" for the forest plot
+final_results_filtered_CKD2009 <- final_results %>%
+  filter(Race != "All Races")
+
+# Display the final results table including "All Races"
+print(final_results)
+
+# Save the final_results table as a CSV file
+write.csv(final_results, "low-risk-ckd2009-results.csv", row.names = FALSE)
+
+
+
+# Function to plot forest plot for metrics
+plot_forest <- function(results_df, metric, lower_ci, upper_ci, title, reference_line) {
+  ggplot(results_df, aes_string(x = metric, y = "Race")) +
+    geom_point(size = 3, shape = 16, color = "blue") +  # Metric point estimates
+    geom_errorbarh(aes_string(xmin = lower_ci, xmax = upper_ci), height = 0.2, color = "black") +  # 95% CI
+    geom_vline(xintercept = reference_line, linetype = "dashed", color = "red") +  # Reference line
+    facet_wrap(~ Time_Horizon, scales = "free_y") +  # Separate panels for each time horizon
+    labs(
+      title = title,
+      x = metric,
+      y = "Race"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 14, face = "bold"),
+      axis.text.x = element_text(size = 14),
+      strip.text = element_text(size = 23, face = "bold"),
+      panel.spacing = unit(1, "lines"),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+}
+
+# Plot the forest plots for AUC and Harrell's C-statistic using the filtered data
+forest_plot_auc <- plot_forest(final_results_filtered_CKD2009, "AUC", "AUC_Lower_CI", "AUC_Upper_CI", "", reference_line = 0.5)
+forest_plot_cstat <- plot_forest(final_results_filtered_CKD2009, "Harrell_C_Statistic", "C_Stat_Lower_CI", "C_Stat_Upper_CI", "", reference_line = 0.5)
+
+# Display the forest plots
+print(forest_plot_auc)
+print(forest_plot_cstat)
+
+# Save the AUC forest plot
+ggsave("CKD2009_VHR_forest_plot_auc_filtered.png", plot = forest_plot_auc, width = 10, height = 8, dpi = 300)
+
+# Save the Harrell's C-statistic forest plot
+ggsave("CKD2009_VHR_forest_plot_cstat_filtered.png", plot = forest_plot_cstat, width = 10, height = 8, dpi = 300)
+
+# Stop the parallel backend after use
+stopCluster(cl)
+```
+
+### 
+
+# CKD-EPI 2021 Population
+
+```{r}
+# Install doParallel package if it's not installed
+# install.packages("doParallel")
+
+# Load the parallel processing libraries
+library(doParallel)
+
+# Set up parallel backend to use multiple processors
+cores <- detectCores() - 1  # Detect the number of cores and use all but one
+cl <- makeCluster(cores)
+registerDoParallel(cl)
+
+# Load necessary libraries
+library(dplyr)
+library(survival)
+
+inrange_person_with_summary <- low_risk_CKD2021
+
+# Step 1: Select relevant columns and rename Albumin_Creatinine for consistency
+person_filtered_KFRE <- inrange_person_with_summary %>%
+  select(
+    person_id,
+    sex_at_birth,
+    eGFR_ckd_epi_2021,
+    Albumin_Creatinine = `Albumin.Creatinine`,
+    age_precise,
+    race,
+    disease_status,
+    time_to_event
+  )
+
+
+
+# Step 2: Data preprocessing and filtering based on the combination of eGFR and ACR for low-risk group
+person_filtered_KFRE <- person_filtered_KFRE %>%
+  mutate(
+    event = disease_status
+  ) %>%
+
+  # Log-transform Albumin/Creatinine ratio (ACR)
+  mutate(logACR = log(Albumin_Creatinine)) %>%
+  # Ensure complete cases (remove rows with missing data)
+  filter(complete.cases(.))
+
+# Filter out rows with non-NA time_to_event values
+case_control_time_to_event_counts <- person_filtered_KFRE %>%
+  filter(!is.na(time_to_event)) %>%  # Keep only rows with non-NA time_to_event
+  group_by(disease_status) %>%  # Assuming "disease_status" column indicates cases and controls
+  summarise(count = n())  # Count the number of rows in each group
+
+# Print the result
+print("Number of cases and controls with non-NA time_to_event values:")
+print(case_control_time_to_event_counts)
+
+
+# Step 3: Verify summary statistics for eGFR and Albumin/Creatinine
+summary(person_filtered_KFRE$eGFR_value)
+summary(person_filtered_KFRE$Albumin_Creatinine)
+
+# Check how many records are retained after filtering
+cat("Number of records after filtering:", nrow(person_filtered_KFRE), "\n")
+
+# Perform a complete case analysis
+initial_row_count <- nrow(person_filtered_KFRE)
+
+complete_cases <- person_filtered_KFRE %>%
+  filter(complete.cases(.))
+
+final_row_count <- nrow(complete_cases)
+
+# Check if any rows have been removed
+rows_removed <- initial_row_count - final_row_count
+
+if (rows_removed > 0) {
+  cat(rows_removed, "rows have been removed during the complete case analysis.\n")
+} else {
+  cat("No rows have been removed during the complete case analysis.\n")
+}
+
+# Report the number of complete cases
+num_complete_cases <- nrow(complete_cases)
+cat("Number of complete cases:", num_complete_cases, "\n")
+
+# Remove any rows with NA in time_to_event or disease_status
+complete_cases <- complete_cases %>%
+  filter(!is.na(time_to_event) & !is.na(disease_status))
+
+# Check the event distribution
+cat("Event distribution (disease_status):\n")
+print(table(complete_cases$disease_status))
+
+# Step 4: Define the formula for calculating βsum (log hazard)
+calculate_beta_sum <- function(age, sex, eGFR, logACR) {
+  (-0.2201 * (age / 10 - 7.036)) +
+  (0.2467 * (ifelse(sex == "Male", 1, 0) - 0.5642)) -
+  (0.5567 * (eGFR / 5 - 7.222)) +
+  (0.4510 * (logACR - 5.137))
+}
+
+# Apply the formula to calculate βsum
+complete_cases <- complete_cases %>%
+  mutate(beta_sum = calculate_beta_sum(age_precise, sex_at_birth, eGFR_ckd_epi_2021, logACR))
+
+# Remove any rows with infinite or NA beta_sum
+complete_cases <- complete_cases %>%
+  filter(is.finite(beta_sum) & !is.na(beta_sum))
+
+# Step 5: Calculate the risk for two and five years using the updated formulas
+complete_cases <- complete_cases %>%
+  mutate(
+    risk_2_years = 100 * (1 - 0.975^exp(beta_sum)),  # Two-Year Risk calculation
+    risk_5_years = 100 * (1 - 0.9240^exp(beta_sum))  # Five-Year Risk calculation
+  )
+
+# Save the data before filtering
+before_filtering <- complete_cases
+
+# Step 6: Apply the filtering to create consistent_data
+consistent_data <- complete_cases %>%
+  filter(!is.na(risk_5_years) & !is.na(risk_2_years))
+
+# Step 7: Define and create the 2-year and 5-year outcomes based on disease_status and time_to_event
+consistent_data <- consistent_data %>%
+  mutate(
+    outcome_2_years = ifelse(disease_status == 1 & time_to_event <= 2 * 365.25, 1, 0),
+    outcome_5_years = ifelse(disease_status == 1 & time_to_event <= 5 * 365.25, 1, 0)
+  )
+
+# Find the rows that were removed by comparing before and after datasets
+removed_rows <- anti_join(before_filtering, consistent_data, by = "person_id")
+
+# Print the removed rows
+if (nrow(removed_rows) > 0) {
+  cat("Rows that were removed during filtering:\n")
+  print(removed_rows)
+} else {
+  cat("No rows were removed during filtering.\n")
+}
+
+# Step 8: Verify the risk values
+summary(consistent_data$risk_5_years)
+summary(consistent_data$risk_2_years)
+
+# Count the number of person_id entries with event == 1 and event == 0
+event_count <- consistent_data %>%
+  group_by(event) %>%
+  summarise(count = n_distinct(person_id))
+
+# Print the results
+cat("Number of person_id with event == 1:", event_count$count[event_count$event == 1], "\n")
+cat("Number of person_id with event == 0:", event_count$count[event_count$event == 0], "\n")
+
+# Check the event distribution for the 2-year and 5-year outcomes
+cat("\n2-Year Outcome Distribution:\n")
+print(table(consistent_data$outcome_2_years))
+
+cat("\n5-Year Outcome Distribution:\n")
+print(table(consistent_data$outcome_5_years))
+
+
+# Evaluation
+# Load necessary libraries
+library(dplyr)
+library(pROC)
+library(survival)
+library(foreach)
+library(doParallel)
+library(ggplot2)
+
+# Function to calculate metrics with bootstrapping and specificity adjustment
+calculate_metrics_with_bootstrap <- function(data, risk_col, outcome_col, time_col, time_limit, n_bootstrap = 5000) {
+  
+  # Record the start time
+  start_time <- Sys.time()
+  
+  # Apply censoring: keep all data but treat events beyond the time limit as censored
+  data_filtered <- data %>%
+    mutate(
+      censored_time = pmin(!!sym(time_col), time_limit * 365),
+      event_status = ifelse(!!sym(outcome_col) == 1 & !!sym(time_col) <= time_limit * 365, 1, 0)
+    )
+  
+  # Filter out rows with missing or invalid data
+  data_filtered <- data_filtered %>%
+    filter(!is.na(!!sym(risk_col)) & !is.na(event_status) & !is.na(censored_time))
+  
+  # If no events or no controls exist in the data, return NA
+  if (length(unique(data_filtered$event_status)) < 2) {
+    return(list(
+      AUC = NA, AUC_Lower = NA, AUC_Upper = NA, C_Statistic = NA,
+      C_Stat_Lower = NA, C_Stat_Upper = NA, Sensitivity = NA,
+      Specificity = NA, PPV = NA, NPV = NA, Optimal_Cutoff = NA,
+      Cutoff_Method = "Not applicable", Cases = NA, Controls = NA
+    ))
+  }
+  
+  # Calculate ROC and AUC
+  roc_curve <- roc(data_filtered$event_status, data_filtered[[risk_col]], levels = c(0, 1), direction = "<")
+  auc_value <- as.numeric(auc(roc_curve))
+  
+  # Try to find the cutoff for specificity target 0.9
+  cutoff_method <- "Specificity 0.9"
+  optimal_cutoff <- tryCatch(
+    {
+      coords(roc_curve, x = 0.9, input = "specificity", ret = "threshold", transpose = TRUE)[1]
+    },
+    error = function(e) {
+      NA
+    }
+  )
+  
+  # If the cutoff for specificity 0.9 is NA, try specificity 0.8
+  if (is.na(optimal_cutoff)) {
+    cutoff_method <- "Specificity 0.8"
+    optimal_cutoff <- tryCatch(
+      {
+        coords(roc_curve, x = 0.8, input = "specificity", ret = "threshold", transpose = TRUE)[1]
+      },
+      error = function(e) {
+        NA
+      }
+    )
+  }
+  
+  # If the cutoff for specificity 0.8 is also NA, use the optimal cutoff
+  if (is.na(optimal_cutoff)) {
+    cutoff_method <- "Optimal Cutoff"
+    optimal_cutoff <- tryCatch(
+      {
+        coords(roc_curve, x = "best", best.method = "closest.topleft", ret = "threshold", transpose = TRUE)[1]
+      },
+      error = function(e) {
+        NA
+      }
+    )
+  }
+  
+  # If the optimal_cutoff is not valid, return NA for metrics
+  if (is.na(optimal_cutoff)) {
+    return(list(
+      AUC = auc_value, AUC_Lower = NA, AUC_Upper = NA, C_Statistic = NA,
+      C_Stat_Lower = NA, C_Stat_Upper = NA, Sensitivity = NA,
+      Specificity = NA, PPV = NA, NPV = NA, Optimal_Cutoff = NA,
+      Cutoff_Method = "Failed", Cases = sum(data_filtered$event_status == 1),
+      Controls = sum(data_filtered$event_status == 0)
+    ))
+  }
+
+  # Calculate predictions based on the new cutoff
+  pred_class <- ifelse(data_filtered[[risk_col]] >= optimal_cutoff, 1, 0)
+
+  # Calculate confusion matrix statistics based on the new cutoff
+  confusion_mat <- table(Predicted = pred_class, Actual = data_filtered$event_status)
+
+  # If confusion matrix is not 2x2, set metrics to NA
+  if (!all(c(0, 1) %in% rownames(confusion_mat)) || !all(c(0, 1) %in% colnames(confusion_mat))) {
+    sensitivity <- NA
+    specificity <- NA
+    ppv <- NA
+    npv <- NA
+  } else {
+    sensitivity <- confusion_mat[2, 2] / sum(confusion_mat[, 2])
+    specificity <- confusion_mat[1, 1] / sum(confusion_mat[, 1])
+    ppv <- confusion_mat[2, 2] / sum(confusion_mat[2, ])
+    npv <- confusion_mat[1, 1] / sum(confusion_mat[1, ])
+  }
+
+  # Bootstrapping AUC and C-statistic for confidence intervals
+  auc_values <- numeric(n_bootstrap)
+  c_stat_values <- numeric(n_bootstrap)
+
+  bootstrapped_results <- foreach(i = 1:n_bootstrap, .combine = rbind, .packages = c("pROC", "survival")) %dopar% {
+    bootstrap_sample <- data_filtered[sample(1:nrow(data_filtered), replace = TRUE), ]
+
+    if (length(unique(bootstrap_sample$event_status)) < 2) {
+      return(c(NA, NA))
+    }
+
+    roc_curve <- roc(bootstrap_sample$event_status, bootstrap_sample[[risk_col]])
+    auc_val <- as.numeric(auc(roc_curve))
+
+    cox_model_boot <- coxph(Surv(bootstrap_sample$censored_time, bootstrap_sample$event_status) ~ bootstrap_sample[[risk_col]], data = bootstrap_sample)
+    c_stat_val <- as.numeric(summary(cox_model_boot)$concordance[1])
+
+    return(c(auc_val, c_stat_val))
+  }
+
+  auc_values <- bootstrapped_results[, 1]
+  c_stat_values <- bootstrapped_results[, 2]
+
+  # Calculate 95% confidence intervals
+  auc_ci <- quantile(auc_values[!is.na(auc_values)], probs = c(0.025, 0.975), na.rm = TRUE)
+  c_stat_ci <- quantile(c_stat_values[!is.na(c_stat_values)], probs = c(0.025, 0.975), na.rm = TRUE)
+
+  # Calculate Harrell's C-statistic for the full dataset
+  cox_model <- coxph(Surv(censored_time, event_status) ~ data_filtered[[risk_col]], data = data_filtered)
+  c_stat <- as.numeric(summary(cox_model)$concordance[1])
+
+  # Record the end time
+  end_time <- Sys.time()
+  total_runtime <- end_time - start_time
+
+  message("Number of bootstrap iterations run:", n_bootstrap)
+  message("Total runtime for the bootstrapping process:", total_runtime, "seconds")
+
+  # Return the metrics
+  return(list(
+    AUC = auc_value, AUC_Lower = auc_ci[1], AUC_Upper = auc_ci[2], 
+    C_Statistic = c_stat, C_Stat_Lower = c_stat_ci[1], C_Stat_Upper = c_stat_ci[2],
+    Sensitivity = sensitivity, Specificity = specificity, PPV = ppv,
+    NPV = npv, Optimal_Cutoff = optimal_cutoff, Cutoff_Method = cutoff_method,
+    Cases = sum(data_filtered$event_status == 1), Controls = sum(data_filtered$event_status == 0)
+  ))
+}
+
+# Function to summarize metrics for each racial group
+summarize_risk_metrics <- function(data, race_label, time_limit, n_bootstrap = 5000) {
+  metrics <- calculate_metrics_with_bootstrap(data, paste0("risk_", time_limit, "_years"), paste0("outcome_", time_limit, "_years"), "time_to_event", time_limit, n_bootstrap)
+  
+  return(data.frame(
+    Race = race_label,
+    Time_Horizon = paste0(time_limit, " Years"),
+    AUC = metrics$AUC,
+    AUC_Lower_CI = metrics$AUC_Lower,
+    AUC_Upper_CI = metrics$AUC_Upper,
+    Harrell_C_Statistic = metrics$C_Statistic,
+    C_Stat_Lower_CI = metrics$C_Stat_Lower,
+    C_Stat_Upper_CI = metrics$C_Stat_Upper,
+    Sensitivity = metrics$Sensitivity,
+    Specificity = metrics$Specificity,
+    PPV = metrics$PPV,
+    NPV = metrics$NPV,
+    Optimal_Cutoff = metrics$Optimal_Cutoff,
+    Cutoff_Method = metrics$Cutoff_Method,
+    Cases = metrics$Cases,
+    Controls = metrics$Controls
+  ))
+}
+
+# Evaluate metrics for each racial group and time horizon
+results_all_2yr <- summarize_risk_metrics(consistent_data, "All Races", 2, n_bootstrap = 5000)
+results_all_5yr <- summarize_risk_metrics(consistent_data, "All Races", 5, n_bootstrap = 5000)
+results_black_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Black or African American"), "Black or African American", 2, n_bootstrap = 5000)
+results_black_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Black or African American"), "Black or African American", 5, n_bootstrap = 5000)
+results_white_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "White"), "White", 2, n_bootstrap = 5000)
+results_white_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "White"), "White", 5, n_bootstrap = 5000)
+results_asian_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Asian"), "Asian", 2, n_bootstrap = 5000)
+results_asian_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Asian"), "Asian", 5, n_bootstrap = 5000)
+
+results_other_2yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Other"), "Other", 2, n_bootstrap = 5000)
+results_other_5yr <- summarize_risk_metrics(consistent_data %>% filter(race == "Other"), "Other", 5, n_bootstrap = 5000)
+
+
+# Combine results including "All Races" for the final table
+final_results <- bind_rows(
+  results_all_2yr, results_all_5yr,
+  results_black_2yr, results_black_5yr,
+  results_white_2yr, results_white_5yr,
+  results_asian_2yr, results_asian_5yr,
+  results_other_2yr, results_other_5yr
+)
+
+# Exclude "All Races" for the forest plot
+final_results_filtered_CKD2021 <- final_results %>%
+  filter(Race != "All Races")
+
+# Display the final results table including "All Races"
+print(final_results)
+
+# Save the final_results table as a CSV file
+write.csv(final_results, "low-risk-ckd2021-results.csv", row.names = FALSE)
+
+
+# Function to plot forest plot for metrics
+plot_forest <- function(results_df, metric, lower_ci, upper_ci, title, reference_line) {
+  ggplot(results_df, aes_string(x = metric, y = "Race")) +
+    geom_point(size = 3, shape = 16, color = "blue") +  # Metric point estimates
+    geom_errorbarh(aes_string(xmin = lower_ci, xmax = upper_ci), height = 0.2, color = "black") +  # 95% CI
+    geom_vline(xintercept = reference_line, linetype = "dashed", color = "red") +  # Reference line
+    facet_wrap(~ Time_Horizon, scales = "free_y") +  # Separate panels for each time horizon
+    labs(
+      title = title,
+      x = metric,
+      y = "Race"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 14, face = "bold"),
+      axis.text.x = element_text(size = 14),
+      strip.text = element_text(size = 23, face = "bold"),
+      panel.spacing = unit(1, "lines"),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+}
+
+# Plot the forest plots for AUC and Harrell's C-statistic using the filtered data
+forest_plot_auc <- plot_forest(final_results_filtered_CKD2021, "AUC", "AUC_Lower_CI", "AUC_Upper_CI", "", reference_line = 0.5)
+forest_plot_cstat <- plot_forest(final_results_filtered_CKD2021, "Harrell_C_Statistic", "C_Stat_Lower_CI", "C_Stat_Upper_CI", "", reference_line = 0.5)
+
+# Display the forest plots
+print(forest_plot_auc)
+print(forest_plot_cstat)
+
+# Save the AUC forest plot
+ggsave("CKD2021_VHR_forest_plot_auc_filtered.png", plot = forest_plot_auc, width = 10, height = 8, dpi = 300)
+
+# Save the Harrell's C-statistic forest plot
+ggsave("CKD2021_VHR_forest_plot_cstat_filtered.png", plot = forest_plot_cstat, width = 10, height = 8, dpi = 300)
+
+```
+
+### 
+
+### Concatenate Data
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+# 
+# final_results_filtered_MDRD  <- read_csv("hypertensive-mdrd-results.csv")
+# final_results_filtered_CKD2009  <- read_csv("hypertensive-ckd2009-results.csv")
+# final_results_filtered_CKD2021  <- read_csv("hypertensive-ckd2021-results.csv")
+# 
+# # Add a column to identify each model
+# final_results_filtered_MDRD$Model <- "MDRD"
+# final_results_filtered_CKD2009$Model <- "CKD-EPI-2009"
+# final_results_filtered_CKD2021$Model <- "CKD-EPI-2021"
+# 
+# # Combine all the data frames
+# combined_results <- bind_rows(
+#   final_results_filtered_MDRD,
+#   final_results_filtered_CKD2009,
+#   final_results_filtered_CKD2021
+# )
+
+# final_results_filtered_MDRD  <- read_csv("diabetic-mdrd-results.csv")
+# final_results_filtered_CKD2009  <- read_csv("diabetic-ckd2009-results.csv")
+# final_results_filtered_CKD2021  <- read_csv("diabetic-ckd2021-results.csv")
+# 
+# # Add a column to identify each model
+# final_results_filtered_MDRD$Model <- "MDRD"
+# final_results_filtered_CKD2009$Model <- "CKD-EPI-2009"
+# final_results_filtered_CKD2021$Model <- "CKD-EPI-2021"
+# 
+# # Combine all the data frames
+# combined_results_diabetic <- bind_rows(
+#   final_results_filtered_MDRD,
+#   final_results_filtered_CKD2009,
+#   final_results_filtered_CKD2021
+# )
+
+
+final_results_filtered_MDRD  <- read_csv("low-risk-mdrd-results.csv")
+final_results_filtered_CKD2009  <- read_csv("low-risk-ckd2009-results.csv")
+final_results_filtered_CKD2021  <- read_csv("low-risk-ckd2021-results.csv")
+
+# Add a column to identify each model
+final_results_filtered_MDRD$Model <- "MDRD"
+final_results_filtered_CKD2009$Model <- "CKD-EPI-2009"
+final_results_filtered_CKD2021$Model <- "CKD-EPI-2021"
+
+# Combine all the data frames
+combined_results_diabetic <- bind_rows(
+  final_results_filtered_MDRD,
+  final_results_filtered_CKD2009,
+  final_results_filtered_CKD2021
+)
+
+# Reorder the levels for the Race factor to start with Black, followed by White, then Asian
+combined_results_diabetic$Race <- factor(combined_results_diabetic$Race, levels = c("All Races", "Black or African American", "White", "Asian", "Other"))
+
+write.csv(combined_results_diabetic, "combined_results_low_risk.csv", row.names = FALSE)
+```
+
+### Group c statistics comparison
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Load data
+combined_results <- read.csv("combined_results_medium_risk.csv")
+
+# Update Race values
+combined_results <- combined_results %>%
+  mutate(Race = recode(Race, "Black or African American" = "Black"))
+
+library(ggplot2)
+library(dplyr)
+
+library(ggplot2)
+library(dplyr)
+library(scales)  # For label formatting
+
+# Updated dataset with model order
+combined_results <- combined_results %>%
+  mutate(Model = factor(Model, levels = c("MDRD", "CKD-EPI-2009", "CKD-EPI-2021")))
+
+# Grayscale plot with different shapes and 2-decimal precision on Y-axis
+plot_cstat_comparison <- function(data) {
+  ggplot(data, aes(x = Model, y = Harrell_C_Statistic, shape = Model)) +
+    geom_point(size = 6, stroke = 1.5, color = "black") +
+    geom_errorbar(aes(ymin = C_Stat_Lower_CI, ymax = C_Stat_Upper_CI), 
+                  width = 0.3, linewidth = 1.5) +
+    facet_grid(Time_Horizon ~ Race, scales = "free") +
+    labs(
+      title = "Harrell's C-Statistic Comparison Across Models",
+      y = "Harrell's C-Statistic"  # Removed x-axis label
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_blank(),  # Remove x-axis labels
+      axis.ticks.x = element_blank(), # Remove x-axis ticks
+      axis.text.y = element_text(size = 14, face = "bold"),
+      axis.title.x = element_blank(),  # Remove x-axis title
+      axis.title.y = element_text(size = 16, face = "bold"),
+      strip.text = element_text(size = 18, face = "bold"),
+      strip.placement = "outside",
+      strip.background = element_blank(),
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5, margin = margin(b = 15)),
+      legend.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12, face = "bold"),
+      panel.spacing = unit(2.5, "lines"),
+      plot.margin = margin(t = 20, r = 20, b = 20, l = 20)
+    ) +
+    scale_y_continuous(labels = label_number(accuracy = 0.01)) +
+    scale_shape_manual(values = c(16, 17, 15)) +  # Circles, triangles, squares
+    guides(shape = guide_legend(override.aes = list(size = 5)))
+}
+
+# Create and display the plot
+cstat_comparison_plot <- plot_cstat_comparison(combined_results)
+print(cstat_comparison_plot)
+
+# Save the plot
+ggsave("medium_risk_C_Statistic_Comparison_Facet_Plot_Grayscale.png", 
+       plot = cstat_comparison_plot, width = 14, height = 8, dpi = 300)
+
+```
+
+# Supplement
+
+Diabetes
+
+```{r}
+#install.packages("flextable")
+library(dplyr)
+library(flextable)
+
+# Load the dataset
+diabetes <- read.csv("combined_results_diabetic.csv")
+
+# Create the flextable
+supplemental_table <- diabetes %>%
+  flextable() %>%
+  autofit() %>%
+  set_caption("Baseline Characteristics of the Diabetes Cohort") %>%
+  theme_vanilla()  # Clean theme for JAMA presentation
+
+# Save as PNG
+library(webshot)
+webshot::install_phantomjs()  # Required for saving PNG from flextable
+
+save_as_image(supplemental_table, path = "Supplemental_Table_Diabetes.png")
+
+```
+
+Hypertension
+
+```{r}
+library(flextable)
+library(dplyr)
+library(webshot2)  # Stable alternative to PhantomJS
+
+# Load the dataset
+hypertensive <- read.csv("combined_results_hypertensive.csv")
+
+# Create the flextable
+supplemental_table <- hypertensive %>%
+  flextable() %>%
+  autofit() %>%                          # Automatically adjust column widths
+  theme_vanilla() %>%                    # Clean design for readability
+  fontsize(size = 10, part = "all") %>%  # Increase font size for improved visibility
+  set_caption("Baseline Characteristics of the Hypertensive Cohort")
+
+# Save as PNG using webshot2
+save_as_image(supplemental_table, path = "Supplemental_Table_Hypertensive.png")
+
+
+```
+
+Very High Risk
+
+```{r}
+library(flextable)
+library(dplyr)
+library(webshot2)  # Stable alternative to PhantomJS
+
+# Load the dataset
+vhr <- read.csv("combined_results_very_high_risk.csv")
+
+# Create the flextable
+supplemental_table <- vhr %>%
+  flextable() %>%
+  autofit() %>%                          # Automatically adjust column widths
+  theme_vanilla() %>%                    # Clean design for readability
+  fontsize(size = 10, part = "all") %>%  # Increase font size for improved visibility
+  set_caption("Baseline Characteristics of the Very High Risk Cohort")
+
+# Save as PNG using webshot2
+save_as_image(supplemental_table, path = "Supplemental_Table_very_high_risk.png")
+
+
+
+```
+
+High Risk
+
+```{r}
+library(flextable)
+library(dplyr)
+library(webshot2)  # Stable alternative to PhantomJS
+
+# Load the dataset
+hr <- read.csv("combined_results_high_risk.csv")
+
+# Create the flextable
+supplemental_table <- hr %>%
+  flextable() %>%
+  autofit() %>%                          # Automatically adjust column widths
+  theme_vanilla() %>%                    # Clean design for readability
+  fontsize(size = 10, part = "all") %>%  # Increase font size for improved visibility
+  set_caption("Baseline Characteristics of the High Risk Cohort")
+
+# Save as PNG using webshot2
+save_as_image(supplemental_table, path = "Supplemental_Table_high_risk.png")
+
+
+
+```
+
+Medium Risk
+
+```{r}
+library(flextable)
+library(dplyr)
+library(webshot2)  # Stable alternative to PhantomJS
+
+# Load the dataset
+mr <- read.csv("combined_results_medium_risk.csv")
+
+# Create the flextable
+supplemental_table <- mr %>%
+  flextable() %>%
+  autofit() %>%                          # Automatically adjust column widths
+  theme_vanilla() %>%                    # Clean design for readability
+  fontsize(size = 10, part = "all") %>%  # Increase font size for improved visibility
+  set_caption("Baseline Characteristics of the Medium Risk Cohort")
+
+# Save as PNG using webshot2
+save_as_image(supplemental_table, path = "Supplemental_Table_medium_risk.png")
+
+
+
+```
+
+Low Risk
+
+```{r}
+library(flextable)
+library(dplyr)
+library(webshot2)  # Stable alternative to PhantomJS
+
+# Load the dataset
+lr <- read.csv("combined_results_low_risk.csv")
+
+# Create the flextable
+supplemental_table <- lr %>%
+  flextable() %>%
+  autofit() %>%                          # Automatically adjust column widths
+  theme_vanilla() %>%                    # Clean design for readability
+  fontsize(size = 10, part = "all") %>%  # Increase font size for improved visibility
+  set_caption("Baseline Characteristics of the Low Risk Cohort")
+
+# Save as PNG using webshot2
+save_as_image(supplemental_table, path = "Supplemental_Table_low_risk.png")
+
+
+
+```

@@ -1,0 +1,1607 @@
+---
+title: "source"
+format: html
+editor: visual
+---
+
+# Survival Analysis
+
+Data Preparation
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+# person_with_summary_inrange_indexdate <- read.csv("combined_person.csv")
+
+person_with_summary_inrange_indexdate <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Step 1: Ensure date columns are in Date format
+person <- person_with_summary_inrange_indexdate %>%
+  mutate(
+    disease_date = as.Date(disease_date),
+    censored_date = as.Date(censored_date),
+    index_date = as.Date(index_date)
+  )
+
+# Step 2: Calculate time-to-event as the min of disease_date or censored_date
+person <- person_with_summary_inrange_indexdate %>%
+  mutate(
+    # Calculate the minimum of disease_date or censored_date (excluding NAs)
+    event_date = pmin(disease_date, censored_date, na.rm = TRUE),
+    
+    # If both dates are NA, we can't calculate time-to-event
+    time_to_event = as.numeric(difftime(event_date, index_date, units = "days")),
+    
+    # For clarity, indicate whether the event was censored or if disease occurred
+    event_type = case_when(
+      !is.na(disease_date) & (disease_date <= censored_date | is.na(censored_date)) ~ "Disease",
+      !is.na(censored_date) & (censored_date < disease_date | is.na(disease_date)) ~ "Censored",
+      TRUE ~ "Unknown"  # In case both dates are NA
+    )
+  )
+
+# Step 3: Review the updated dataset with time_to_event and event_type
+head(person[, c("person_id", "index_date", "disease_date", "censored_date", "time_to_event", "event_type")])
+
+# 168,306 participants, 17 variables, contains full cohort
+write.csv(person, "survival_data.csv", row.names = FALSE)
+
+
+
+```
+
+### Cohort case control summary
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+# Assuming person_with_summary_inrange_indexdate has columns: person_id, race, and disease_status
+# where disease_status is 1 for cases and 0 for controls
+
+# Calculate the number of cases and controls for each race
+cases_controls_summary <- person_with_summary_inrange_indexdate %>%
+  group_by(race) %>%
+  summarise(
+    total_individuals = n(),                           # Total number of individuals for each race
+    cases = sum(disease_status == 1, na.rm = TRUE),    # Count of cases
+    controls = sum(disease_status == 0, na.rm = TRUE)  # Count of controls
+  )
+
+# Display the results
+print(cases_controls_summary)
+
+```
+
+## Cohort KP Curve
+
+## With risk table
+
+```{r}
+# Load necessary libraries
+library(survival)
+library(survminer)
+library(dplyr)
+library(ggplot2)
+
+# Ensure 'race' is a factor with explicit levels
+person_with_summary_inrange_indexdate <- person_with_summary_inrange_indexdate %>%
+  mutate(
+    race = factor(race, levels = c("Asian", "Black or African American", "White", "Other"))
+  )
+
+# Create a Kaplan-Meier survival object stratified by race
+km_fit <- survfit(Surv(time_to_event / 365, disease_status == 1) ~ race, data = person_with_summary_inrange_indexdate)
+
+# Custom color palette for survival curves
+lancet_colors <- c(
+  "Asian" = "#1f78b4",                     # Blue
+  "Black or African American" = "#e31a1c", # Red
+  "White" = "#33a02c",                     # Green
+  "Other" = "#6a3d9a"                      # Purple
+)
+
+# Kaplan-Meier plot (WITH risk table)
+km_plot <- ggsurvplot(
+  km_fit,
+  data = person_with_summary_inrange_indexdate,
+  pval = TRUE,
+  conf.int = TRUE,                # Confidence intervals
+  conf.int.style = "step",        # Step-style for confidence intervals
+  risk.table = TRUE,              # Include the risk table
+  risk.table.height = 0.25,       # Adjust the height of risk table
+  risk.table.fontsize = 6,        # Font size for the risk table
+  legend.title = "Race",
+  legend.labs = names(lancet_colors),
+  linetype = "solid",
+  ggtheme = theme_minimal() +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      legend.position = "right",
+      legend.text = element_text(size = 23),
+      legend.title = element_text(size = 23, face = "bold"),
+      axis.title = element_text(size = 20, face = "bold"),
+      axis.text = element_text(size = 18),
+      plot.title = element_text(size = 22, face = "bold")
+    ),
+  xlab = "Time in Years",
+  ylab = "Survival Probability",
+  size = 2,
+  font.legend = c(23)
+)
+
+# Apply color mapping
+km_plot$plot <- km_plot$plot +
+  scale_color_manual(values = lancet_colors)
+
+# Explicitly save the combined plot including the risk table
+png(filename = "km_plot_with_risk_table.png", width = 20, height = 18, units = "in", res = 900)
+print(km_plot)
+dev.off()
+
+# Display plot
+print(km_plot)
+```
+
+KP Zoomed
+
+```{r}
+# Load necessary libraries
+library(survival)
+library(survminer)
+library(dplyr)
+library(ggplot2)
+
+# Read data and ensure 'race' is a factor with explicit levels
+person_with_summary_inrange_indexdate <- read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv") %>%
+  mutate(
+    race = factor(race, levels = c("Asian", "Black or African American", "White", "Other"))
+  )
+
+# Create Kaplan-Meier survival object stratified by race
+km_fit <- survfit(Surv(time_to_event / 365, disease_status == 1) ~ race, data = person_with_summary_inrange_indexdate)
+
+# Custom color palette
+lancet_colors <- c(
+  "Asian" = "#1f78b4",
+  "Black or African American" = "#e31a1c",
+  "White" = "#33a02c",
+  "Other" = "#6a3d9a"
+)
+
+# Zoomed Kaplan-Meier plot WITH risk table
+km_plot_zoomed <- ggsurvplot(
+  km_fit,
+  data = person_with_summary_inrange_indexdate,
+  pval = TRUE,
+  pval.coord = c(0, 0.82),
+  ylim = c(0.80, 1),
+  conf.int = TRUE,
+  conf.int.style = "step",
+  risk.table = TRUE,
+  risk.table.height = 0.25,
+  risk.table.fontsize = 6,
+  legend.title = "Race",
+  legend.labs = names(lancet_colors),
+  linetype = "solid",
+  ggtheme = theme_minimal() +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      legend.position = "right",
+      legend.text = element_text(size = 23),
+      legend.title = element_text(size = 23, face = "bold"),
+      axis.title = element_text(size = 20, face = "bold"),
+      axis.text = element_text(size = 18),
+      plot.title = element_text(size = 22, face = "bold")
+    ),
+  xlab = "Time in Years",
+  ylab = "Survival Probability",
+  size = 2,
+  font.legend = c(23),
+  palette = NULL
+)
+
+# Apply correct color mapping
+km_plot_zoomed$plot <- km_plot_zoomed$plot +
+  scale_color_manual(values = lancet_colors)
+
+# Save high-resolution zoomed plot including risk table
+png(filename = "km_zoomed_with_risk_table.png", width = 20, height = 18, units = "in", res = 900)
+print(km_plot_zoomed)
+dev.off()
+
+# Display plot
+print(km_plot_zoomed)
+
+```
+
+### The Asians left after the last event in the Asian Population
+
+```{r}
+# Load necessary libraries
+library(survival)
+library(survminer)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)  # Required for arranging plots
+library(tibble)
+person_with_summary_inrange_indexdate <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Ensure that the race column includes "Other" and is treated as a factor
+person_with_summary_inrange_indexdate <- person_with_summary_inrange_indexdate %>%
+  mutate(
+    race = factor(race, levels = c("White", "Black or African American", "Asian", "Other")),
+    time_to_event_years = time_to_event / 365 # Convert time to years
+  )
+
+# Create a Kaplan-Meier survival object stratified by race
+km_fit <- survfit(Surv(time_to_event_years, disease_status == 1) ~ race, 
+                  data = person_with_summary_inrange_indexdate)
+
+# Define custom colors to match four categories
+lancet_colors <- c(
+  "White" = "black", 
+  "Black or African American" = "black", 
+  "Asian" = "black", 
+  "Other" = "black"
+)
+
+# Ensure that race levels match the color mapping
+race_levels <- levels(person_with_summary_inrange_indexdate$race)
+lancet_colors <- lancet_colors[race_levels]
+
+# Extract last event time and remaining count dynamically for each group
+last_event_info <- person_with_summary_inrange_indexdate %>%
+  group_by(race) %>%
+  summarize(
+    `Last Event Time (years)` = round(max(time_to_event_years[disease_status == 1], na.rm = TRUE), 2),
+    `Remaining Participants` = sum(time_to_event_years >= max(time_to_event_years[disease_status == 1], na.rm = TRUE), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rename(Race = race)
+
+# Convert table to `tibble` for better handling
+last_event_info <- as_tibble(last_event_info)
+
+# Kaplan-Meier plot (Including "Other" & Risk Table)
+km_plot <- ggsurvplot(
+  km_fit,
+  data = person_with_summary_inrange_indexdate,
+  pval = TRUE,                     # Include p-value for log-rank test
+  conf.int = TRUE,                 # Include confidence intervals
+  conf.int.style = "step",         # Dashed lines for confidence intervals
+  risk.table = TRUE,               # Include risk table
+  risk.table.col = "strata",        # Color risk table according to strata
+  legend.title = "Race",
+  legend.labs = race_levels,
+  linetype = "solid",               # Use solid lines for all groups
+  ggtheme = theme_minimal() + theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()
+  ),  # Remove grid lines
+  xlab = "Time in Years",          # Update X-axis label to years
+  ylab = "Survival Probability",   # Y-axis label
+  size = 2,                        # Increase line thickness for visibility
+  font.main = c(22, "bold"),       # Increase title font size and bold for emphasis
+  font.x = c(20),                  # X-axis label font size
+  font.y = c(20),                  # Y-axis label font size
+  font.tickslab = c(18),           # Increase axis ticks label size
+  font.legend = c(23),             # Increase font size of legend labels
+  risk.table.fontsize = 6,         # Adjust risk table font size
+  legend = "right",                # Position legend on the right side
+  legend.linetype = "solid",       # Ensure all legend lines are solid
+  legend.size = 2                  # Increase thickness of legend lines
+)
+
+# Apply color mapping explicitly to the survival plot
+km_plot$plot <- km_plot$plot +
+  scale_color_manual(values = lancet_colors)
+
+# Convert last event information to a tableGrob with color formatting
+table_plot <- tableGrob(last_event_info, 
+                        theme = ttheme_default(
+                          core = list(fg_params = list(fontsize = 16)),  # Set table text size
+                          colhead = list(fg_params = list(col = "black", fontsize = 18, fontface = "bold")), # Header
+                          rowhead = list(fg_params = list(col = lancet_colors[last_event_info$Race], fontsize = 18, fontface = "bold")) # Apply colors per strata
+                        ))
+
+# Save high-resolution plots
+ggsave("km_plot_with_risk_table.png", plot = km_plot$plot, dpi = 900, width = 20, height = 15)
+ggsave("last_event_table.png", plot = table_plot, dpi = 900, width = 10, height = 3)
+
+# Display the Kaplan-Meier plot and last event table together
+grid.arrange(km_plot$plot, table_plot, ncol = 1)
+
+```
+
+# 
+
+## Data prep for eGFR calculation
+
+### Individuals with 0 creatnine
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+# Assuming 'person_with_summary_inrange_indexdate' dataset is already loaded
+
+# Calculate the number of people in each race with serum_creatinine == 0
+creatinine_zero_counts <- person_with_summary_inrange_indexdate %>%
+  filter(serum_creatinine == 0) %>%
+  group_by(race, disease_status) %>%
+  summarise(count = n())
+
+# Print the result
+print(creatinine_zero_counts)
+
+```
+
+### Sex= Male or Female
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+# Count the number of males and females in each race
+sex_counts <- person_with_summary_inrange_indexdate %>%
+  group_by(race, gender) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = gender, values_from = count, values_fill = list(count = 0))
+
+# Display the table
+print(sex_counts)
+
+```
+
+### Observations with serum_creatinine \> 0 & serum_creatinine \<= 300 and sex_at_birth is "Male" or "Female"
+
+```{r}
+library(dplyr)
+library(knitr)
+
+# Step 1: Filter out observations with serum_creatinine > 0 & serum_creatinine <= 300 and sex_at_birth is "Male" or "Female"
+person_with_summary_inrange_indexdate_creatnine <- person_with_summary_inrange_indexdate %>%
+  filter(serum_creatinine > 0 & serum_creatinine <= 300) %>%
+  filter(sex_at_birth %in% c("Male", "Female"))
+
+# Step 2: Function to calculate the number of cases and controls by group
+summarize_by_group <- function(data, group_var) {
+  data %>%
+    group_by(!!sym(group_var), disease_status) %>%
+    summarise(count = n(), .groups = 'drop') %>%
+    mutate(group = if_else(disease_status == 1, "Cases", "Controls")) %>%
+    select(!!sym(group_var), group, count)  # Return selected columns
+}
+
+# Summaries by race (Black, White, Asian)
+black_summary <- person_with_summary_inrange_indexdate_creatnine %>%
+  filter(race == "Black or African American") %>%
+  summarize_by_group("race") %>%
+  mutate(race_group = "Black Participants")
+
+white_summary <- person_with_summary_inrange_indexdate_creatnine %>%
+  filter(race == "White") %>%
+  summarize_by_group("race") %>%
+  mutate(race_group = "White Participants")
+
+asian_summary <- person_with_summary_inrange_indexdate_creatnine %>%
+  filter(race == "Asian") %>%
+  summarize_by_group("race") %>%
+  mutate(race_group = "Asian Participants")
+
+# Summary for all participants
+all_participants_summary <- person_with_summary_inrange_indexdate_creatnine %>%
+  group_by(disease_status) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  mutate(group = if_else(disease_status == 1, "Cases", "Controls"),
+         race = "All Participants",
+         race_group = "All Participants") %>% 
+  select(race, group, count, race_group) # Align columns correctly
+
+# Step 3: Combine all summaries into a single table
+combined_summary <- bind_rows(black_summary, white_summary, asian_summary, all_participants_summary)
+
+# Print the summary table for number of cases and controls
+print("Summary of Cases and Controls by Race (Filtered for Serum Creatinine and Sex):")
+print(combined_summary)
+
+# Optional: Display the table in a nice format (if using RMarkdown or similar)
+kable(combined_summary, caption = "Summary of Cases and Controls by Race (Filtered for Serum Creatinine and Sex)")
+
+```
+
+### minimum and maximum serum_creatinine values
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+
+# Calculate the minimum and maximum serum_creatinine values
+creatinine_summary <- person_with_summary_inrange_indexdate_creatnine %>%
+  summarise(
+    min_serum_creatinine = min(serum_creatinine, na.rm = TRUE),
+    max_serum_creatinine = max(serum_creatinine, na.rm = TRUE)
+  )
+
+# Print the summary
+print(creatinine_summary)
+
+```
+
+# eGFR MDRD CALCULATION
+
+```{r}
+library(dplyr)
+
+# Step 1: Define the function to calculate eGFR using the MDRD equation
+calculate_eGFR_MDRD <- function(serum_creatinine, age, sex_factor, race_factor) {
+  # Calculate eGFR using the MDRD equation
+  eGFR <- 186 * (serum_creatinine ^ -1.154) * (age ^ -0.203) * sex_factor * race_factor
+  return(eGFR)
+}
+
+# Step 2: Calculate eGFR directly using serum creatinine in mg/dL
+person_with_summary_inrange_indexdate_creatnine <- person_with_summary_inrange_indexdate_creatnine %>%
+  mutate(
+    # Ensure serum_creatinine is converted to numeric
+    serum_creatinine_numeric = as.numeric(serum_creatinine),
+    
+    # Apply the appropriate sex factor (Female = 0.742, Male = 1)
+    sex_factor = ifelse(sex_at_birth == "Female", 0.742, 1),
+    
+    # Apply the appropriate race factor (Black = 1.21, others = 1)
+    race_factor = ifelse(race == "Black or African American", 1.21, 1),
+    
+    # Calculate eGFR_MDRD
+    eGFR_MDRD = ifelse(
+      is.na(serum_creatinine_numeric) | serum_creatinine_numeric <= 0 | is.na(age_precise) | age_precise <= 0,
+      NA,
+      calculate_eGFR_MDRD(serum_creatinine_numeric, age_precise, sex_factor, race_factor)
+    )
+  ) %>%
+  # Drop the temporary variables used for the eGFR calculation
+  select(-serum_creatinine_numeric, -sex_factor, -race_factor)
+
+# Step 3: Print the number of cases and controls that have a valid eGFR_MDRD value
+valid_eGFR_counts <- person_with_summary_inrange_indexdate_creatnine %>%
+  filter(!is.na(eGFR_MDRD)) %>%
+  group_by(disease_status) %>%
+  summarise(count = n())
+
+cat("Number of cases (disease_status == 1) with valid eGFR_MDRD:", 
+    valid_eGFR_counts$count[valid_eGFR_counts$disease_status == 1], "\n")
+cat("Number of controls (disease_status == 0) with valid eGFR_MDRD:", 
+    valid_eGFR_counts$count[valid_eGFR_counts$disease_status == 0], "\n")
+
+# Step 4: Print the summary statistics of the eGFR_MDRD values
+summary_eGFR_MDRD <- summary(person_with_summary_inrange_indexdate_creatnine$eGFR_MDRD)
+
+cat("\nSummary statistics for eGFR_MDRD:\n")
+print(summary_eGFR_MDRD)
+
+
+```
+
+### eGFR_MDRD summary
+
+```{r}
+library(dplyr)
+library(knitr)
+
+# Function to generate summary and ensure it always has 7 rows (including NA's)
+generate_summary <- function(data, column) {
+  summary_vector <- summary(data[[column]])
+  
+  # Check if the 'NA's' row is missing, and if so, append it
+  if (length(summary_vector) == 6) {
+    summary_vector <- c(summary_vector, "NA's" = sum(is.na(data[[column]])))
+  }
+  
+  return(as.numeric(summary_vector))
+}
+
+# Step 1: Summary for all participants
+summary_all <- generate_summary(person_with_summary_inrange_indexdate_creatnine, "eGFR_MDRD")
+
+# Step 2: Summary for Black participants
+summary_black <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Black or African American"), 
+                                 "eGFR_MDRD")
+
+# Step 3: Summary for White participants
+summary_white <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "White"), 
+                                 "eGFR_MDRD")
+
+# Step 4: Summary for Asian participants
+summary_asian <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Asian"), 
+                                 "eGFR_MDRD")
+
+# Step 5: Summary for Other participants
+summary_other <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Other"), 
+                                 "eGFR_MDRD")
+
+# Step 6: Create a summary table for all five groups
+summary_table <- data.frame(
+  Statistic = c("Min", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max", "NA's"),
+  All_Participants = summary_all,
+  Black_Participants = summary_black,
+  White_Participants = summary_white,
+  Asian_Participants = summary_asian,
+  Other_Participants = summary_other  # Adding "Other"
+)
+
+# Step 7: Print the summary table
+print("Summary of eGFR_MDRD for All Participants, Black Participants, White Participants, Asian Participants, and Other Participants:")
+kable(summary_table, caption = "Summary Statistics of eGFR_MDRD by Race Group")
+
+```
+
+# CKD-EPI 2009 CALCULATION
+
+```{r}
+# Step 1: Extract relevant columns and set up the CKD-EPI 2009 equation variables
+person_with_summary_inrange_indexdate_creatnine <- person_with_summary_inrange_indexdate_creatnine %>%
+  mutate(
+    # Define the kappa and alpha parameters based on sex
+    kappa = ifelse(sex_at_birth == "Female", 0.7, 0.9),
+    alpha = ifelse(sex_at_birth == "Female", -0.329, -0.411),
+    sex_factor = ifelse(sex_at_birth == "Female", 1.018, 1),
+
+    # Define the race factor (1 for White, 1.159 for Black or African American)
+    race_factor = ifelse(race == "Black or African American", 1.159, 1),
+
+    # Apply the CKD-EPI 2009 equation for eGFR calculation
+    eGFR_ckd_epi_2009 = 141 * pmin(serum_creatinine / kappa, 1)^alpha * 
+                        pmax(serum_creatinine / kappa, 1)^(-1.209) * 
+                        (0.993^age_precise) * sex_factor * race_factor
+  ) %>%
+  # Step 2: Remove all temporary variables used in the calculation
+  select(-kappa, -alpha, -sex_factor, -race_factor)
+
+# Step 3: Print the number of cases and controls that have a valid eGFR_ckd_epi_2009 value
+valid_eGFR_counts <- person_with_summary_inrange_indexdate_creatnine %>%
+  filter(!is.na(eGFR_ckd_epi_2009)) %>%
+  group_by(disease_status) %>%
+  summarise(count = n())
+
+cat("Number of cases (disease_status == 1) with valid eGFR_ckd_epi_2009:", 
+    valid_eGFR_counts$count[valid_eGFR_counts$disease_status == 1], "\n")
+cat("Number of controls (disease_status == 0) with valid eGFR_ckd_epi_2009:", 
+    valid_eGFR_counts$count[valid_eGFR_counts$disease_status == 0], "\n")
+
+# Step 4: Print the summary statistics of the eGFR_ckd_epi_2009 values
+summary_eGFR <- summary(person_with_summary_inrange_indexdate_creatnine$eGFR_ckd_epi_2009)
+
+cat("\nSummary statistics for eGFR_ckd_epi_2009:\n")
+print(summary_eGFR)
+
+# Optional: Print a few rows of the dataset to verify the eGFR values are appended
+head(person_with_summary_inrange_indexdate_creatnine, 10)
+
+```
+
+## eGFR_ckd_epi_2009 summary
+
+```{r}
+library(dplyr)
+library(knitr)
+
+# Function to generate summary and ensure it always has 7 rows (including NA's)
+generate_summary <- function(data, column) {
+  summary_vector <- summary(data[[column]])
+  
+  # Check if the 'NA's' row is missing, and if so, append it
+  if (length(summary_vector) == 6) {
+    summary_vector <- c(summary_vector, "NA's" = sum(is.na(data[[column]])))
+  }
+  
+  return(as.numeric(summary_vector))
+}
+
+# Step 1: Summary for all participants
+summary_all <- generate_summary(person_with_summary_inrange_indexdate_creatnine, "eGFR_ckd_epi_2009")
+
+# Step 2: Summary for Black participants
+summary_black <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Black or African American"), 
+                                 "eGFR_ckd_epi_2009")
+
+# Step 3: Summary for White participants
+summary_white <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "White"), 
+                                 "eGFR_ckd_epi_2009")
+
+# Step 4: Summary for Asian participants
+summary_asian <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Asian"), 
+                                 "eGFR_ckd_epi_2009")
+
+# Step 5: Summary for Other participants
+summary_other <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Other"), 
+                                 "eGFR_ckd_epi_2009")
+
+# Step 6: Create a summary table for all five groups
+summary_table <- data.frame(
+  Statistic = c("Min", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max", "NA's"),
+  All_Participants = summary_all,
+  Black_Participants = summary_black,
+  White_Participants = summary_white,
+  Asian_Participants = summary_asian,
+  Other_Participants = summary_other  # Adding "Other"
+)
+
+# Step 7: Print the summary table
+print("Summary of eGFR_ckd_epi_2009 for All Participants, Black Participants, White Participants, Asian Participants, and Other Participants:")
+kable(summary_table, caption = "Summary Statistics of eGFR_ckd_epi_2009 by Race Group")
+
+```
+
+# CKD-EPI 2021 CALCULATION
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+
+# Step 1: Extract relevant columns and set up the CKD-EPI 2021 equation variables
+person_with_summary_inrange_indexdate_creatnine <- person_with_summary_inrange_indexdate_creatnine %>%
+  mutate(
+    # Define the kappa and alpha parameters based on sex (CKD-EPI 2021 without race)
+    kappa = ifelse(sex_at_birth == "Female", 0.7, 0.9),
+    alpha = ifelse(sex_at_birth == "Female", -0.241, -0.302),
+    sex_factor = ifelse(sex_at_birth == "Female", 1.012, 1),
+
+    # Apply the CKD-EPI 2021 equation for eGFR calculation (without race)
+    eGFR_ckd_epi_2021 = 142 * pmin(serum_creatinine / kappa, 1)^alpha * 
+                        pmax(serum_creatinine / kappa, 1)^(-1.2) * 
+                        (0.9938^age_precise) * sex_factor
+  ) %>%
+  # Step 2: Remove the temporary variables (kappa, alpha, sex_factor)
+  select(-kappa, -alpha, -sex_factor)
+
+# Step 3: Print the number of cases and controls that have a valid eGFR_ckd_epi_2021 value
+# Assuming disease_status == 1 means case and disease_status == 0 means control
+valid_eGFR_counts_2021 <- person_with_summary_inrange_indexdate_creatnine %>%
+  filter(!is.na(eGFR_ckd_epi_2021)) %>%
+  group_by(disease_status) %>%
+  summarise(count = n())
+
+cat("Number of cases (disease_status == 1) with valid eGFR_ckd_epi_2021:", 
+    valid_eGFR_counts_2021$count[valid_eGFR_counts_2021$disease_status == 1], "\n")
+cat("Number of controls (disease_status == 0) with valid eGFR_ckd_epi_2021:", 
+    valid_eGFR_counts_2021$count[valid_eGFR_counts_2021$disease_status == 0], "\n")
+
+# Step 4: Print the summary statistics of the eGFR_ckd_epi_2021 values
+summary_eGFR_2021 <- summary(person_with_summary_inrange_indexdate_creatnine$eGFR_ckd_epi_2021)
+
+cat("\nSummary statistics for eGFR_ckd_epi_2021:\n")
+print(summary_eGFR_2021)
+
+# Optional: Print a few rows of the dataset to verify the eGFR_ckd_epi_2021 values are appended
+head(person_with_summary_inrange_indexdate_creatnine, 10)
+
+```
+
+## eGFR_ckd_epi_2021 summary
+
+```{r}
+library(dplyr)
+library(knitr)
+
+# Function to generate summary and ensure it always has 7 rows (including NA's)
+generate_summary <- function(data, column) {
+  summary_vector <- summary(data[[column]])
+  
+  # Check if the 'NA's' row is missing, and if so, append it
+  if (length(summary_vector) == 6) {
+    summary_vector <- c(summary_vector, "NA's" = sum(is.na(data[[column]])))
+  }
+  
+  return(as.numeric(summary_vector))
+}
+
+# Step 1: Summary for all participants
+summary_all <- generate_summary(person_with_summary_inrange_indexdate_creatnine, "eGFR_ckd_epi_2021")
+
+# Step 2: Summary for Black participants
+summary_black <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Black or African American"), 
+                                 "eGFR_ckd_epi_2021")
+
+# Step 3: Summary for White participants
+summary_white <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "White"), 
+                                 "eGFR_ckd_epi_2021")
+
+# Step 4: Summary for Asian participants
+summary_asian <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Asian"), 
+                                 "eGFR_ckd_epi_2021")
+
+# Step 5: Summary for Other participants
+summary_other <- generate_summary(person_with_summary_inrange_indexdate_creatnine %>% 
+                                   filter(race == "Other"), 
+                                 "eGFR_ckd_epi_2021")
+
+# Step 6: Create a summary table for all five groups
+summary_table <- data.frame(
+  Statistic = c("Min", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max", "NA's"),
+  All_Participants = summary_all,
+  Black_Participants = summary_black,
+  White_Participants = summary_white,
+  Asian_Participants = summary_asian,
+  Other_Participants = summary_other  # Adding "Other"
+)
+
+# Step 7: Print the summary table
+print("Summary of eGFR_ckd_epi_2021 for All Participants, Black Participants, White Participants, Asian Participants, and Other Participants:")
+kable(summary_table, caption = "Summary Statistics of eGFR_ckd_epi_2021 by Race Group")
+
+```
+
+# Save Analysis Data sets
+
+```{r}
+# Save the dataframes to CSV files
+# 125,098 participants, 222 variables, contains creatnine cohort with creatnine value > 0 and  disease_date after index date and control with censored date after index date
+write.csv(person_with_summary_inrange_indexdate_creatnine, "person_with_summary_inrange_indexdate_creatnine.csv", row.names = FALSE)
+
+```
+
+# eGFR Analysis: Distribution Bars
+
+```{r}
+person_with_summary_inrange_indexdate_creatnine <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+#person_with_summary_inrange_indexdate_creatnine <- read.csv("person_with_summary_inrange_indexdate_creatnine.csv")
+
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+
+# Define the function to calculate eGFR categories
+calculate_eGFR_categories <- function(data, eGFR_column) {
+  data %>%
+    mutate(
+      eGFR_category = case_when(
+        !!sym(eGFR_column) < 15 ~ "Kidney failure (<15)",
+        !!sym(eGFR_column) >= 15 & !!sym(eGFR_column) < 60 ~ "Kidney disease (15-59)",
+        !!sym(eGFR_column) >= 60 & !!sym(eGFR_column) < 90 ~ "Early-stage (60-89)",
+        !!sym(eGFR_column) >= 90 ~ "Normal (>=90)",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    group_by(eGFR_category) %>%
+    summarise(
+      count = n(),
+      percentage = (n() / nrow(data)) * 100
+    ) %>%
+    ungroup()
+}
+
+# Combine the eGFR category summaries for each race and method
+combine_data_for_plot <- function(data, eGFR_method, race) {
+  data %>%
+    mutate(Method = eGFR_method, Race = race) %>%
+    rename(Count = count, Percentage = percentage)
+}
+
+# Prepare data for each method and race
+eGFR_MDRD_plot_data_black <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Black or African American"), "eGFR_MDRD"),
+  "MDRD", "Black"
+)
+eGFR_ckd_epi_2009_plot_data_black <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Black or African American"), "eGFR_ckd_epi_2009"),
+  "CKD-EPI 2009", "Black"
+)
+eGFR_ckd_epi_2021_plot_data_black <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Black or African American"), "eGFR_ckd_epi_2021"),
+  "CKD-EPI 2021", "Black"
+)
+
+eGFR_MDRD_plot_data_white <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "White"), "eGFR_MDRD"),
+  "MDRD", "White"
+)
+eGFR_ckd_epi_2009_plot_data_white <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "White"), "eGFR_ckd_epi_2009"),
+  "CKD-EPI 2009", "White"
+)
+eGFR_ckd_epi_2021_plot_data_white <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "White"), "eGFR_ckd_epi_2021"),
+  "CKD-EPI 2021", "White"
+)
+
+eGFR_MDRD_plot_data_asian <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Asian"), "eGFR_MDRD"),
+  "MDRD", "Asian"
+)
+eGFR_ckd_epi_2009_plot_data_asian <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Asian"), "eGFR_ckd_epi_2009"),
+  "CKD-EPI 2009", "Asian"
+)
+eGFR_ckd_epi_2021_plot_data_asian <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Asian"), "eGFR_ckd_epi_2021"),
+  "CKD-EPI 2021", "Asian"
+)
+
+
+eGFR_MDRD_plot_data_other <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Other"), "eGFR_MDRD"),
+  "MDRD", "Other"
+)
+eGFR_ckd_epi_2009_plot_data_other <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Other"), "eGFR_ckd_epi_2009"),
+  "CKD-EPI 2009", "Other"
+)
+eGFR_ckd_epi_2021_plot_data_other <- combine_data_for_plot(
+  calculate_eGFR_categories(person_with_summary_inrange_indexdate_creatnine %>% filter(race == "Other"), "eGFR_ckd_epi_2021"),
+  "CKD-EPI 2021", "Other"
+)
+
+# Combine data for all methods and races
+combined_plot_data <- bind_rows(
+  eGFR_MDRD_plot_data_black, eGFR_ckd_epi_2009_plot_data_black, eGFR_ckd_epi_2021_plot_data_black,
+  eGFR_MDRD_plot_data_white, eGFR_ckd_epi_2009_plot_data_white, eGFR_ckd_epi_2021_plot_data_white,
+  eGFR_MDRD_plot_data_asian, eGFR_ckd_epi_2009_plot_data_asian, eGFR_ckd_epi_2021_plot_data_asian,
+  eGFR_MDRD_plot_data_other, eGFR_ckd_epi_2009_plot_data_other, eGFR_ckd_epi_2021_plot_data_other
+)
+
+# Reorder the eGFR methods so MDRD (1999) appears first
+combined_plot_data$Method <- factor(combined_plot_data$Method, 
+                                    levels = c("MDRD", "CKD-EPI 2009", "CKD-EPI 2021"))
+
+# Reorder the CKD stages for plotting
+combined_plot_data$eGFR_category <- factor(combined_plot_data$eGFR_category, 
+                                           levels = c("Kidney failure (<15)", 
+                                                      "Kidney disease (15-59)", 
+                                                      "Early-stage (60-89)", 
+                                                      "Normal (>=90)"))
+
+# Define a custom color palette suitable for a Lancet-style presentation
+lancet_palette <- c(
+  "Kidney failure (<15)" = "#D73027",  # Dark red
+  "Kidney disease (15-59)" = "#FC8D59",  # Salmon
+  "Early-stage (60-89)" = "#FEE090",  # Light orange
+  "Normal (>=90)" = "#4575B4"  # Soft blue
+)
+
+# Create a stacked bar chart where colors represent CKD stages
+plot <- ggplot(combined_plot_data, aes(x = Method, y = Percentage, fill = eGFR_category)) +
+  geom_bar(stat = "identity", position = "fill", width = 0.3) +  # Reduce bar width
+  facet_wrap(~ Race, nrow = 1) +  # Ensure all races are in a single row
+  labs(title = "CKD Stage Distribution by Race and eGFR Method",
+       x = "eGFR Method",
+       y = "Proportion",
+       fill = "CKD Stage: ") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = lancet_palette) +  # Apply Lancet-style color palette
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14, face = "bold"),  # Smaller x-axis text
+    axis.text.y = element_text(size = 14, face = "bold"), 
+    axis.title.x = element_text(size = 16, face = "bold"), 
+    axis.title.y = element_text(size = 16, face = "bold"), 
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5), 
+    legend.title = element_text(size = 14, face = "bold"), 
+    legend.text = element_text(size = 14, face = "bold"), 
+    legend.position = "top",  # Move legend to the top
+    strip.text = element_text(size = 16, face = "bold")  # Smaller facet labels
+  )
+
+# Save the updated plot
+ggsave("CKD_Stage_Distribution.png", plot, dpi = 300, width = 12, height = 5)
+
+# Display the updated plot
+plot
+
+```
+
+### Data Summary
+
+```{r}
+library(dplyr)
+
+person_with_summary_inrange_indexdate_creatnine <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+
+# Calculate the number of cases and controls for each race
+case_control_summary <- person_with_summary_inrange_indexdate_creatnine %>%
+  group_by(race, disease_status) %>%   # Group by race and disease status
+  summarise(count = n(), .groups = 'drop') %>%  # Count the number of occurrences for each group
+  mutate(status = ifelse(disease_status == 1, "Cases", "Controls")) %>%  # Label cases and controls
+  select(race, status, count)  # Select relevant columns
+
+# Print the summary
+print(case_control_summary)
+
+
+# Load necessary library
+library(dplyr)
+
+# Check if the column exists in the dataset
+if ("serum_creatinine" %in% colnames(person_with_summary_inrange_indexdate_creatnine)) {
+  
+  # Get the min and max values of serum creatinine
+  serum_creatinine_range <- person_with_summary_inrange_indexdate_creatnine %>%
+    summarise(
+      Min = min(serum_creatinine, na.rm = TRUE),
+      Max = max(serum_creatinine, na.rm = TRUE)
+    )
+  
+  # Print the range
+  print(serum_creatinine_range)
+  
+} else {
+  print("Column 'serum_creatinine' not found in dataset.")
+}
+
+
+
+```
+
+#### eGFR Density Plot
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+person_with_summary_inrange_indexdate_creatnine <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+
+
+# Step 1: Reshape the data into a long format for easy plotting
+person_long <- person_with_summary_inrange_indexdate_creatnine %>%
+  select(race, eGFR_MDRD, eGFR_ckd_epi_2009, eGFR_ckd_epi_2021) %>%
+  pivot_longer(
+    cols = c(eGFR_MDRD, eGFR_ckd_epi_2009, eGFR_ckd_epi_2021),
+    names_to = "eGFR_Method",
+    values_to = "eGFR_Value"
+  )
+
+# Set factor levels for eGFR_Method to ensure the correct order
+person_long$eGFR_Method <- factor(person_long$eGFR_Method, 
+                                  levels = c("eGFR_MDRD", "eGFR_ckd_epi_2009", "eGFR_ckd_epi_2021"),
+                                  labels = c("MDRD", "CKD-EPI 2009", "CKD-EPI 2021"))
+
+# Remove rows with NA values in eGFR_Value
+person_long <- person_long %>% filter(!is.na(eGFR_Value))
+
+# Step 2: Calculate mean, standard deviation, min, and max for each group
+mean_sd_data <- person_long %>%
+  group_by(race, eGFR_Method) %>%
+  summarise(
+    mean_value = mean(eGFR_Value, na.rm = TRUE),
+    sd_value = sd(eGFR_Value, na.rm = TRUE),
+    min_value = min(eGFR_Value, na.rm = TRUE),
+    max_value = max(eGFR_Value, na.rm = TRUE),
+    .groups = "drop"  # To suppress the grouping message
+  )
+
+# Find the maximum value for the y-axis range
+max_value <- max(person_long$eGFR_Value, na.rm = TRUE)
+
+# Step 3: Create the density plot with mean, SD lines, and annotations
+density_plot <- ggplot(person_long, aes(x = eGFR_Value, fill = race)) +
+  geom_density(alpha = 0.4, adjust = 1.5) +  # Density plot with adjusted smoothing
+  geom_vline(data = mean_sd_data, aes(xintercept = mean_value, color = race), linetype = "dashed", linewidth = 1.2) +
+  # Using geom_segment to display the mean ± SD ranges
+  geom_segment(data = mean_sd_data,
+               aes(x = mean_value - sd_value, xend = mean_value + sd_value,
+                   y = 0, yend = 0, color = race),
+               linewidth = 1.5) +
+  # Adding annotations for mean, min, and max values with bold text and increased size
+  geom_text(data = mean_sd_data, aes(x = mean_value, y = 0.01, label = paste("Mean:", round(mean_value, 1))),
+            color = "black", size = 6, vjust = -1.5, fontface = "bold", angle = 90) +
+  geom_text(data = mean_sd_data, aes(x = min_value, y = 0.01, label = paste("Min:", round(min_value, 1))),
+            color = "black", size = 6, vjust = -1.5, fontface = "bold", angle = 90) +
+  geom_text(data = mean_sd_data, aes(x = max_value, y = 0.01, label = paste("Max:", round(max_value, 1))),
+            color = "black", size = 6, vjust = -1.5, fontface = "bold", angle = 90) +
+  # Apply custom colors
+  scale_fill_manual(values = c("White" = "#1f78b4", "Black or African American" = "#e31a1c", "Asian" = "#33a02c")) +
+  scale_color_manual(values = c("White" = "#1f78b4", "Black or African American" = "#e31a1c", "Asian" = "#33a02c")) +
+  facet_wrap(~ race + eGFR_Method, scales = "free") +  # Allow free x and y scales for each facet
+  theme_minimal() +
+  labs(
+    title = "",
+    x = "eGFR Value (mL/min/1.73 m²)",
+    y = "Density",
+    fill = "Race",
+    color = "Race"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 24, face = "bold"),
+    axis.title.x = element_text(size = 20, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 16, face = "bold"),
+    axis.text.y = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 16, face = "bold"),
+    strip.text = element_text(size = 18, face = "bold")
+  )
+
+# Print the density plot
+print(density_plot)
+
+# Save the density plot with increased size for better visibility
+ggsave("Annotated_Density_eGFR_Plot_Free_Scales.png", plot = density_plot, dpi = 600, width = 20, height = 12)
+
+```
+
+# Read-in data
+
+```{r}
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(purrr)
+library(stringr)
+
+#install.packages("survival")
+#install.packages("survminer")
+
+# Load the necessary libraries
+library(survival)
+
+# install.packages("RColorBrewer")
+library(RColorBrewer)
+
+# Install and load necessary packages
+#install.packages("caret")
+#install.packages("ggplot2")
+library(caret)
+library(ggplot2)
+
+# Load necessary libraries
+#library(pROC)
+
+person_with_summary_inrange_indexdate_creatnine <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv")
+
+# Load necessary library
+library(dplyr)
+
+# Calculate summary statistics for time_to_event in years
+summary_stats <- person_with_summary_inrange_indexdate_creatnine %>%
+  summarise(
+    Min = min(time_to_event) / 365.25,
+    Q1 = quantile(time_to_event, 0.25) / 365.25,
+    Median = median(time_to_event) / 365.25,
+    Mean = mean(time_to_event) / 365.25,
+    Q3 = quantile(time_to_event, 0.75) / 365.25,
+    Max = max(time_to_event) / 365.25,
+    SD = sd(time_to_event) / 365.25
+  )
+
+# Create a nicely formatted table
+library(knitr)
+kable(summary_stats, col.names = c("Min (years)", "Q1 (years)", "Median (years)", 
+                                   "Mean (years)", "Q3 (years)", "Max (years)", "SD (years)"),
+      caption = "Summary Statistics for Time-to-Event Data (in Years)")
+
+```
+
+# InRange eGFR data
+
+```{r}
+disease_status_count <- person_with_summary_inrange_indexdate_creatnine %>%
+  group_by(disease_status) %>%
+  summarise(count = n())
+
+# Print the counts
+print(disease_status_count)
+```
+
+## Albumin.Creatinine Analysis
+
+# Albumin Data Import
+
+```{r}
+library(tidyverse)
+library(bigrquery)
+
+# This query represents dataset "Albumin data" for domain "measurement" and was generated for All of Us Controlled Tier Dataset v7
+dataset_42101363_measurement_sql <- paste("
+    SELECT
+        measurement.person_id,
+        measurement.measurement_concept_id,
+        m_standard_concept.concept_name as standard_concept_name,
+        m_standard_concept.concept_code as standard_concept_code,
+        m_standard_concept.vocabulary_id as standard_vocabulary,
+        measurement.measurement_datetime,
+        measurement.measurement_type_concept_id,
+        m_type.concept_name as measurement_type_concept_name,
+        measurement.operator_concept_id,
+        m_operator.concept_name as operator_concept_name,
+        measurement.value_as_number,
+        measurement.value_as_concept_id,
+        m_value.concept_name as value_as_concept_name,
+        measurement.unit_concept_id,
+        m_unit.concept_name as unit_concept_name,
+        measurement.range_low,
+        measurement.range_high,
+        measurement.visit_occurrence_id,
+        m_visit.concept_name as visit_occurrence_concept_name,
+        measurement.measurement_source_value,
+        measurement.measurement_source_concept_id,
+        m_source_concept.concept_name as source_concept_name,
+        m_source_concept.concept_code as source_concept_code,
+        m_source_concept.vocabulary_id as source_vocabulary,
+        measurement.unit_source_value,
+        measurement.value_source_value 
+    FROM
+        ( SELECT
+            * 
+        FROM
+            `measurement` measurement 
+        WHERE
+            (
+                measurement_concept_id IN (SELECT
+                    DISTINCT c.concept_id 
+                FROM
+                    `cb_criteria` c 
+                JOIN
+                    (SELECT
+                        CAST(cr.id as string) AS id       
+                    FROM
+                        `cb_criteria` cr       
+                    WHERE
+                        concept_id IN (3024561)       
+                        AND full_text LIKE '%_rank1]%'      ) a 
+                        ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                        OR c.path LIKE CONCAT('%.', a.id) 
+                        OR c.path LIKE CONCAT(a.id, '.%') 
+                        OR c.path = a.id) 
+                WHERE
+                    is_standard = 1 
+                    AND is_selectable = 1)
+            )  
+            AND (
+                measurement.PERSON_ID IN (SELECT
+                    distinct person_id  
+                FROM
+                    `cb_search_person` cb_search_person  
+                WHERE
+                    cb_search_person.person_id IN (SELECT
+                        person_id 
+                    FROM
+                        `person` p 
+                    WHERE
+                        race_concept_id IN (8527, 8516, 2100000001, 8515, 903096, 2000000008, 45882607, 1177221, 38003615, 8557) ) 
+                    AND cb_search_person.person_id NOT IN (SELECT
+                        criteria.person_id 
+                    FROM
+                        (SELECT
+                            DISTINCT person_id, entry_date, concept_id 
+                        FROM
+                            `cb_search_all_events` 
+                        WHERE
+                            (concept_id IN(SELECT
+                                DISTINCT c.concept_id 
+                            FROM
+                                `cb_criteria` c 
+                            JOIN
+                                (SELECT
+                                    CAST(cr.id as string) AS id       
+                                FROM
+                                    `cb_criteria` cr       
+                                WHERE
+                                    concept_id IN (440508)       
+                                    AND full_text LIKE '%_rank1]%'      ) a 
+                                    ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                                    OR c.path LIKE CONCAT('%.', a.id) 
+                                    OR c.path LIKE CONCAT(a.id, '.%') 
+                                    OR c.path = a.id) 
+                            WHERE
+                                is_standard = 1 
+                                AND is_selectable = 1) 
+                            AND is_standard = 1 )) criteria ) )
+            )) measurement 
+    LEFT JOIN
+        `concept` m_standard_concept 
+            ON measurement.measurement_concept_id = m_standard_concept.concept_id 
+    LEFT JOIN
+        `concept` m_type 
+            ON measurement.measurement_type_concept_id = m_type.concept_id 
+    LEFT JOIN
+        `concept` m_operator 
+            ON measurement.operator_concept_id = m_operator.concept_id 
+    LEFT JOIN
+        `concept` m_value 
+            ON measurement.value_as_concept_id = m_value.concept_id 
+    LEFT JOIN
+        `concept` m_unit 
+            ON measurement.unit_concept_id = m_unit.concept_id 
+    LEFT JOIn
+        `visit_occurrence` v 
+            ON measurement.visit_occurrence_id = v.visit_occurrence_id 
+    LEFT JOIN
+        `concept` m_visit 
+            ON v.visit_concept_id = m_visit.concept_id 
+    LEFT JOIN
+        `concept` m_source_concept 
+            ON measurement.measurement_source_concept_id = m_source_concept.concept_id", sep="")
+
+# Formulate a Cloud Storage destination path for the data exported from BigQuery.
+# NOTE: By default data exported multiple times on the same day will overwrite older copies.
+#       But data exported on a different days will write to a new location so that historical
+#       copies can be kept as the dataset definition is changed.
+measurement_42101363_path <- file.path(
+  Sys.getenv("WORKSPACE_BUCKET"),
+  "bq_exports",
+  Sys.getenv("OWNER_EMAIL"),
+  strftime(lubridate::now(), "%Y%m%d"),  # Comment out this line if you want the export to always overwrite.
+  "measurement_42101363",
+  "measurement_42101363_*.csv")
+message(str_glue('The data will be written to {measurement_42101363_path}. Use this path when reading ',
+                 'the data into your notebooks in the future.'))
+
+# Perform the query and export the dataset to Cloud Storage as CSV files.
+# NOTE: You only need to run `bq_table_save` once. After that, you can
+#       just read data from the CSVs in Cloud Storage.
+bq_table_save(
+  bq_dataset_query(Sys.getenv("WORKSPACE_CDR"), dataset_42101363_measurement_sql, billing = Sys.getenv("GOOGLE_PROJECT")),
+  measurement_42101363_path,
+  destination_format = "CSV")
+
+
+# Read the data directly from Cloud Storage into memory.
+# NOTE: Alternatively you can `gsutil -m cp {measurement_42101363_path}` to copy these files
+#       to the Jupyter disk.
+read_bq_export_from_workspace_bucket <- function(export_path) {
+  col_types <- cols(standard_concept_name = col_character(), standard_concept_code = col_character(), standard_vocabulary = col_character(), measurement_type_concept_name = col_character(), operator_concept_name = col_character(), value_as_concept_name = col_character(), unit_concept_name = col_character(), visit_occurrence_concept_name = col_character(), measurement_source_value = col_character(), source_concept_name = col_character(), source_concept_code = col_character(), source_vocabulary = col_character(), unit_source_value = col_character(), value_source_value = col_character())
+  bind_rows(
+    map(system2('gsutil', args = c('ls', export_path), stdout = TRUE, stderr = TRUE),
+        function(csv) {
+          message(str_glue('Loading {csv}.'))
+          chunk <- read_csv(pipe(str_glue('gsutil cat {csv}')), col_types = col_types, show_col_types = FALSE)
+          if (is.null(col_types)) {
+            col_types <- spec(chunk)
+          }
+          chunk
+        }))
+}
+dataset_42101363_measurement_df <- read_bq_export_from_workspace_bucket(measurement_42101363_path)
+
+dim(dataset_42101363_measurement_df)
+
+head(dataset_42101363_measurement_df, 5)
+```
+
+```{r}
+albumin_df <- dataset_42101363_measurement_df
+```
+
+## Attach Albumin.creatnine within feature window before index date
+
+```{r}
+#install.packages("tidyverse")
+library(tidyverse)
+library(data.table)
+
+# Step 1: Convert 'albumin_df' and 'person_with_summary_inrange_indexdate_creatnine' to data.table for efficient join
+albumin_df_dt <- as.data.table(albumin_df)
+person_dt <- as.data.table(person_with_summary_inrange_indexdate_creatnine)
+
+# Perform the join to add 'index_date' and 'race' from 'person' to 'albumin_df'
+albumin_df_dt <- albumin_df_dt[person_dt, on = "person_id", `:=`(index_date = i.index_date, race = i.race)]
+
+# Convert back to data.frame if necessary
+albumin_df <- as.data.frame(albumin_df_dt)
+
+# Step 2: Filter and rename specific standard concept names for "Albumin"
+measurement_filtered_specific <- albumin_df %>%
+  filter(
+    standard_concept_name == "Albumin [Mass/volume] in Serum or Plasma"
+  ) %>%
+  rename(unified_albumin = value_as_number)  # Using a consistent name for Albumin
+
+# Ensure both measurement_datetime and index_date are in Date format
+measurement_filtered_specific <- measurement_filtered_specific %>%
+  mutate(
+    measurement_datetime = as.Date(measurement_datetime),
+    index_date = as.Date(index_date)
+  )
+
+# Step 3: Filter rows where 'measurement_datetime' is within 365 days before 'index_date'
+feature_window <- 365  # Define the feature window in days
+
+measurement_filtered_window <- measurement_filtered_specific %>%
+  filter((index_date - measurement_datetime) >= 0 & (index_date - measurement_datetime) <= feature_window)
+
+# Step 4: For each person, select the first non-NA measurement within the feature window (closest to the index_date)
+albumin_first_measurement <- measurement_filtered_window %>%
+  filter(!is.na(unified_albumin)) %>%  # Ensure we only consider non-NA values
+  group_by(person_id) %>%
+  arrange(desc(measurement_datetime)) %>%  # Arrange to get the latest measurement within the window
+  slice_head(n=1) %>%  # Select the first row (most recent non-NA measurement before index_date)
+  mutate(date_of_albumin_measurement = measurement_datetime) %>%  # Capture the measurement date
+  ungroup()
+
+# Check the resulting data frame
+print(albumin_first_measurement)
+
+# Define the groups based on Albumin ranges provided
+albumin_first_measurement <- albumin_first_measurement %>%
+  mutate(group = case_when(
+    unified_albumin < 30 ~ "< 30",
+    unified_albumin >= 30 & unified_albumin < 300 ~ "30-299",
+    unified_albumin >= 300 & unified_albumin < 2200 ~ "300-2199",
+    unified_albumin >= 2200 ~ ">= 2200"
+  ))
+
+# Step 6: Calculate the count and percentage of each group, with race breakdown
+group_summary <- albumin_first_measurement %>%
+  group_by(group) %>%
+  summarise(
+    count = n(),
+    white_count = sum(race == "White", na.rm = TRUE),
+    black_count = sum(race == "Black or African American", na.rm = TRUE),
+    asian_count = sum(race == "Asian", na.rm = TRUE)  # Include Asian race
+  ) %>%
+  mutate(
+    percentage = (count / sum(count)) * 100,
+    white_percentage = (white_count / count) * 100,
+    black_percentage = (black_count / count) * 100,
+    asian_percentage = (asian_count / count) * 100  # Calculate percentage for Asian race
+  )
+
+# Print the group summary with counts and percentages, including race breakdown
+cat("Group summary with count and percentage, including race breakdown:\n")
+print(group_summary)
+
+# Step 7: Append `unified_albumin` and `date_of_albumin_measurement` to `person_with_summary_inrange_indexdate_creatnine`
+person_with_summary_inrange_indexdate_creatnine_albumin <- person_with_summary_inrange_indexdate_creatnine %>%
+  left_join(albumin_first_measurement %>% 
+              select(person_id, unified_albumin, date_of_albumin_measurement), 
+            by = "person_id")
+
+# Print the updated dataset
+cat("Updated person_with_summary_inrange_indexdate_creatnine_albumin dataset:\n")
+print(person_with_summary_inrange_indexdate_creatnine_albumin)
+
+# Display column names of the updated dataset
+cat("Column names of person_with_summary_inrange_indexdate_creatnine_albumin:\n")
+print(colnames(person_with_summary_inrange_indexdate_creatnine_albumin))
+
+# Rename the column in the dataset
+person_with_summary_inrange_indexdate_creatnine_albumin <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  rename(Albumin = unified_albumin)
+
+# Print the updated column names to verify the change
+print(colnames(person_with_summary_inrange_indexdate_creatnine_albumin))
+
+```
+
+## Albumin case count analysis
+
+```{r}
+library(dplyr)
+library(knitr)
+
+# Step 1: Filter the dataset for relevant Albumin.Creatinine or Microalbumin.Creatinine values, and group by race and disease_status
+
+# For Black participants
+black_albumin_counts <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  filter(!is.na(Albumin) & race == "Black or African American") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "Black Participants")
+
+# For White participants
+white_albumin_counts <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  filter(!is.na(Albumin) & race == "White") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "White Participants")
+
+# For Asian participants
+asian_albumin_counts <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  filter(!is.na(Albumin) & race == "Asian") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "Asian Participants")
+
+# For Other participants
+other_albumin_counts <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  filter(!is.na(Albumin) & race == "Other") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "Other Participants")
+
+# Combine all race groups into one table
+combined_counts <- bind_rows(black_albumin_counts, white_albumin_counts, asian_albumin_counts, other_albumin_counts)
+
+# Step 2: Print the results in a neat table
+kable(combined_counts, caption = "Number of Cases and Controls with Non-NA Albumin Values by Race")
+
+
+```
+
+Ensure there is no NA Albumin values
+
+Ensured: Before filtering filtered_person_with_summary had 125,098 observations. There is o NA Albumin values in our selection
+
+```{r}
+library(dplyr)
+
+# Remove rows where Albumin is NA
+person_with_summary_inrange_indexdate_creatnine_albumin_NA <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  filter(!is.na(Albumin))
+
+# Count the number of cases and controls
+cases_controls_count <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  group_by(disease_status) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  mutate(group = if_else(disease_status == 1, "Cases", "Controls"))
+
+# Count the number of cases and controls
+cases_controls_count_NA <- person_with_summary_inrange_indexdate_creatnine_albumin_NA %>%
+  group_by(disease_status) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  mutate(group = if_else(disease_status == 1, "Cases", "Controls"))
+
+# Print the number of cases and controls
+print("Number of cases and controls before and after removing rows with NA Albumin:")
+print(cases_controls_count)
+print(cases_controls_count_NA)
+
+
+```
+
+# Calculate Albumin : Creatnine
+
+```{r}
+library(dplyr)
+
+# Ensure Albumin and serum_creatinine are numeric
+filtered_person_with_summary <- person_with_summary_inrange_indexdate_creatnine_albumin %>%
+  mutate(
+    Albumin = as.numeric(Albumin),
+    serum_creatinine = as.numeric(serum_creatinine)
+  )
+
+# Filter for people who have non-NA values for both Albumin and serum_creatinine
+filtered_data_with_albumin_creatinine <- filtered_person_with_summary %>%
+  filter(!is.na(Albumin) & !is.na(serum_creatinine)) %>%
+  mutate(Albumin.Creatinine = Albumin / serum_creatinine)  # Calculate the ratio
+
+# Calculate the number of cases and controls with non-NA time_to_event values
+na_time_to_event_summary <- filtered_data_with_albumin_creatinine %>%
+  filter(is.na(time_to_event)) %>%  # Only include those with NA time_to_event
+  group_by(disease_status) %>%      # Group by disease_status
+  summarise(count = n())            # Count the number of rows in each group
+
+# Print the results
+cat("Number of cases and controls with NA time_to_event among those with both Albumin and Creatinine values:\n")
+print(na_time_to_event_summary)
+
+# Display the column names of the updated dataset
+cat("Column names of filtered_person_with_summary with Albumin.Creatinine added:\n")
+print(colnames(filtered_data_with_albumin_creatinine))
+
+
+```
+
+## Albumin : Creatinine outlier analysis
+
+```{r}
+# Filter the dataset for person_id with Albumin.Creatinine >= 10000 and count by disease_status
+disease_status_above_10000 <- filtered_data_with_albumin_creatinine %>%
+  filter(Albumin.Creatinine >= 10000) %>%  # Filter rows where Albumin.Creatinine is ≥ 10000
+  group_by(disease_status) %>%  # Group by disease_status
+  summarise(
+    person_count = n_distinct(person_id),  # Count unique person_id
+    person_ids = paste(unique(person_id), collapse = ", ")  # Concatenate all person_id values
+  )
+
+# Print the result
+cat("Number of person_id with Albumin.Creatinine values greater than or equal to 10000 by disease_status:\n")
+print(disease_status_above_10000)
+
+# Print each person_id separately
+cat("\nList of person_id with Albumin.Creatinine ≥ 10000:\n")
+filtered_data_with_albumin_creatinine %>%
+  filter(Albumin.Creatinine >= 10000) %>%
+  select(person_id, disease_status, Albumin.Creatinine) %>%
+  arrange(desc(Albumin.Creatinine)) %>%
+  print(n = Inf)  # Print all values
+
+
+```
+
+## Save data
+
+```{r}
+# 74,012 participants, 232 variables, contains filter(serum_creatinine > 0) and non NA index date, filter(sex_at_birth %in% c("Male", "Female")), with Albumin.Creatinine values and event date after index date
+
+write.csv(filtered_data_with_albumin_creatinine, "person_with_summary_inrange_indexdate_creatnine_albumin.csv", row.names = FALSE)
+
+
+```
+
+## Albumin.Creatnine case count analysis
+
+```{r}
+library(dplyr)
+library(knitr)
+filtered_data_with_albumin_creatinine <-  read.csv("person_with_summary_inrange_indexdate_creatnine_albumin.csv")
+
+# Step 1: Filter the dataset for relevant Albumin.Creatinine or Microalbumin.Creatinine values, and group by race and disease_status
+
+# For Black participants
+black_albumin_creatnine_counts <- filtered_data_with_albumin_creatinine %>%
+  filter(!is.na(Albumin.Creatinine) & race == "Black or African American") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "Black Participants")
+
+# For White participants
+white_albumin_creatnine_counts <- filtered_data_with_albumin_creatinine %>%
+  filter(!is.na(Albumin.Creatinine) & race == "White") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "White Participants")
+
+# For Asian participants
+asian_albumin_creatnine_counts <- filtered_data_with_albumin_creatinine %>%
+  filter(!is.na(Albumin.Creatinine) & race == "Asian") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "Asian Participants")
+
+# For Other participants
+other_albumin_creatnine_counts <- filtered_data_with_albumin_creatinine %>%
+  filter(!is.na(Albumin.Creatinine) & race == "Other") %>%
+  group_by(disease_status) %>%
+  summarise(count = n()) %>%
+  mutate(race = "Other Participants")
+
+# Combine all race groups into one table
+combined_counts <- bind_rows(black_albumin_creatnine_counts, white_albumin_creatnine_counts, asian_albumin_creatnine_counts, other_albumin_creatnine_counts)
+
+# Step 2: Print the results in a neat table
+kable(combined_counts, caption = "Number of Cases and Controls with Non-NA Albumin.Creatnine Values by Race")
+
+
+```
+
+## summary of participants with Albumin is \> 10
+
+```{r}
+library(tidyr)
+library(dplyr)
+
+# Filter data for Albumin.Creatinine > 10
+filtered_data <- filtered_data_with_albumin_creatinine %>%
+  filter(!is.na(Albumin.Creatinine) & Albumin.Creatinine > 10)
+
+# Summary statistics for the filtered data
+summary(filtered_data$Albumin.Creatinine)
+
+
+# Count the number of cases and controls for each race
+race_summary <- filtered_data %>%
+  group_by(race, disease_status) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = disease_status, values_from = count, values_fill = list(count = 0))
+
+# Print the summary
+print(race_summary)
+
+write.csv(filtered_data, "person_with_summary_inrange_indexdate_creatnine_albumin_inrange.csv", row.names = FALSE)
+
+
+```
+
+# 
